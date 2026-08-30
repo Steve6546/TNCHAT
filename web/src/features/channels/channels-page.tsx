@@ -344,16 +344,13 @@ export function ChannelsPage() {
               ))}
             </div>
           ) : rows.length === 0 ? (
+            // No call to action here on purpose: the header button is the one
+            // place "إضافة نموذج" lives, so the page never shows two ways to do
+            // the same thing — and it stays reachable once the list is full.
             <EmptyState
               icon={Waypoints}
               title="لا توجد نماذج بعد"
-              description="أضف قناة واحدة على الأقل ليتمكّن العميل من استخدام البوابة."
-              action={
-                <Button onClick={openCreate}>
-                  <Plus />
-                  إضافة نموذج
-                </Button>
-              }
+              description="أضف قناة واحدة على الأقل ليتمكّن العميل من استخدام البوابة — من زر «إضافة نموذج» أعلى الصفحة."
             />
           ) : (
             <ul className="divide-y divide-border">
@@ -540,12 +537,49 @@ export function ChannelsPage() {
 
             <div className="space-y-2">
               <Label htmlFor="channel-keys">مفاتيح API</Label>
+
+              {/*
+                An empty textarea over a channel that already has keys reads as
+                "no key set". The stored ones cannot be shown — they are
+                encrypted — so say plainly that they are there.
+              */}
+              {editing && editing.keyCount > 0 ? (
+                <div className="rounded-lg border border-success/40 bg-success/5 px-3 py-2">
+                  <p className="text-xs font-medium text-success" dir="ltr">
+                    •••••••••••• (مفتاح محفوظ ومُشفر)
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {editing.keyCount === 1
+                      ? 'مفتاح واحد محفوظ لهذه القناة.'
+                      : `${editing.keyCount} مفاتيح محفوظة لهذه القناة.`}{' '}
+                    اترك الحقل فارغاً للإبقاء عليها، أو اكتب مفتاحاً جديداً لاستبدالها.
+                  </p>
+                  {editing.keyPreviews.length > 0 ? (
+                    <ul className="mt-2 space-y-1">
+                      {editing.keyPreviews.map((preview, index) => (
+                        <li
+                          key={`${preview}-${index}`}
+                          className="truncate font-mono text-[11px] text-muted-foreground"
+                          dir="ltr"
+                        >
+                          {preview}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : null}
+
               <Textarea
                 id="channel-keys"
                 dir="ltr"
                 value={form.keys}
                 onChange={(event) => setForm({ ...form, keys: event.target.value })}
-                placeholder={editing ? 'اتركه فارغاً للإبقاء على المفاتيح الحالية' : 'مفتاح واحد في كل سطر'}
+                placeholder={
+                  editing && editing.keyCount > 0
+                    ? 'اكتب مفتاحاً جديداً لاستبدال المحفوظ — أو اتركه فارغاً'
+                    : 'مفتاح واحد في كل سطر'
+                }
                 required={!editing}
               />
               <p className="text-xs text-muted-foreground">

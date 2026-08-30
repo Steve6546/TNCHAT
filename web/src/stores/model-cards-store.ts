@@ -19,6 +19,8 @@ export interface ModelPreset {
 
 export const MODEL_PRESETS: ModelPreset[] = [
   { alias: 'claude-opus-5', hint: 'Opus 5 — الأعلى قدرة' },
+  { alias: 'claude-sonnet-5', hint: 'Sonnet 5 — الأحدث للعمل اليومي' },
+  { alias: 'claude-opus-4-1', hint: 'Opus 4.1 — تفكير عميق' },
   { alias: 'claude-sonnet-4', hint: 'Sonnet 4 — متوازن' },
   { alias: 'claude-3-7-sonnet', hint: 'Sonnet 3.7 — تفكير موسّع' },
   { alias: 'claude-3-5-sonnet', hint: 'Sonnet 3.5 — الأكثر استخداماً' },
@@ -42,7 +44,7 @@ interface ModelCardsState {
  * list, so a renamed hint or a deliberately deleted card survives an upgrade
  * while genuinely new models still appear.
  */
-export const MODEL_CARDS_VERSION = 1;
+export const MODEL_CARDS_VERSION = 2;
 
 /** Pure so the upgrade path can be reasoned about (and tested) on its own. */
 export function migrateModelCards(persisted: unknown, version: number): { cards: ModelPreset[] } {

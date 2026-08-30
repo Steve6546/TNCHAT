@@ -242,6 +242,12 @@ claude`;
               الأسطر لتوجيهها إلى البوابة:
             </p>
             <CodeBlock title="متغيّرات البيئة" code={claudeCodeExample} />
+            <p className="text-xs leading-6 text-muted-foreground">
+              البوابة تمرّر طلب Claude Code كما هو دون تعديل: التفكير الموسّع{' '}
+              <code dir="ltr">thinking</code>، مستويات الجهد{' '}
+              <code dir="ltr">output_config.effort</code>، استدعاء الأدوات واستخدام الحاسوب،
+              وترويسة <code dir="ltr">anthropic-beta</code>. لا حاجة لأي إعداد إضافي.
+            </p>
           </div>
 
           <div className="space-y-2">
