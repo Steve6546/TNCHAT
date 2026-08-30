@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Moon, Server, ShieldCheck, Sun } from 'lucide-react';
+import { BookOpen, Moon, Server, ShieldCheck, SlidersHorizontal, Sun } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -14,18 +14,26 @@ import { PasswordField } from '../../components/ui/password-field';
 import { Skeleton } from '../../components/ui/skeleton';
 import { useToast } from '../../components/ui/toast';
 import { endpoints, queryKeys } from '../../lib/api';
-import { errorMessage, formatDuration } from '../../lib/utils';
+import { cn, errorMessage, formatDuration } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth-store';
 import { useThemeStore } from '../../stores/theme-store';
+import { SetupGuide } from './setup-guide';
 
 /**
- * Settings: password rotation, appearance, and a read-only view of the running
- * configuration.
+ * Settings: password rotation, appearance, a read-only view of the running
+ * configuration, and the setup guide.
  *
  * The configuration block deliberately shows *sources* (`env` / `file` /
  * `generated`) rather than the secrets themselves — the operator needs to know
  * whether the master key is pinned without the page becoming a way to read it.
  */
+
+type SettingsTab = 'general' | 'guide';
+
+const TABS: { id: SettingsTab; label: string; icon: typeof SlidersHorizontal }[] = [
+  { id: 'general', label: 'الإعدادات', icon: SlidersHorizontal },
+  { id: 'guide', label: 'دليل التشغيل', icon: BookOpen },
+];
 
 export function SettingsPage() {
   const navigate = useNavigate();
@@ -33,6 +41,7 @@ export function SettingsPage() {
   const logout = useAuthStore((state) => state.logout);
   const { theme, setTheme } = useThemeStore();
 
+  const [tab, setTab] = useState<SettingsTab>('general');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -78,7 +87,35 @@ export function SettingsPage() {
     <>
       <PageHeader title="الإعدادات" description="الأمان والمظهر وحالة الخادم الجاري" />
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="أقسام الإعدادات">
+        {TABS.map((entry) => {
+          const Icon = entry.icon;
+          const active = tab === entry.id;
+          return (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(entry.id)}
+              className={cn(
+                'inline-flex h-9 items-center gap-2 rounded-md px-3 text-sm font-medium outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-ring',
+                active
+                  ? 'bg-secondary text-secondary-foreground'
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
+            >
+              <Icon />
+              {entry.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === 'guide' ? (
+        <SetupGuide />
+      ) : (
+        <div className="grid gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>كلمة مرور المسؤول</CardTitle>
@@ -235,6 +272,7 @@ export function SettingsPage() {
           </Card>
         </div>
       </div>
+      )}
     </>
   );
 }

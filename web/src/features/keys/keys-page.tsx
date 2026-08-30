@@ -18,7 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../../components/ui/dialog';
-import { Input, Textarea } from '../../components/ui/input';
+import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import {
   Sheet,
@@ -33,7 +33,7 @@ import { Switch } from '../../components/ui/switch';
 import { useToast } from '../../components/ui/toast';
 import { endpoints, queryKeys, relayEndpoint } from '../../lib/api';
 import type { ApiKeyItem } from '../../lib/types';
-import { errorMessage, formatDate, toEpochMs } from '../../lib/utils';
+import { errorMessage, formatDate, toEpochMs, toLocalInput } from '../../lib/utils';
 
 /**
  * Client API keys — the credentials applications send to the gateway.
@@ -43,13 +43,26 @@ import { errorMessage, formatDate, toEpochMs } from '../../lib/utils';
  * the only way out, and the key is unrecoverable after that.
  */
 
-const EMPTY_FORM = { name: '', group: 'default', modelLimit: '', expiresAt: '' };
+const EMPTY_FORM: KeyFormState = { name: '', group: 'default', expiresAt: '' };
 
 interface KeyFormState {
   name: string;
   group: string;
-  modelLimit: string;
   expiresAt: string;
+}
+
+/**
+ * Which models a key may reach is decided by the channels it is routed to, so
+ * the form deliberately does not ask again — `modelLimit` is always empty.
+ */
+const EXPIRY_PRESETS: { label: string; days: number }[] = [
+  { label: '30 يوماً', days: 30 },
+  { label: '90 يوماً', days: 90 },
+  { label: 'سنة', days: 365 },
+];
+
+function expiryIn(days: number): string {
+  return toLocalInput(Date.now() + days * 24 * 60 * 60 * 1000);
 }
 
 /**
@@ -99,10 +112,7 @@ export function KeysPage() {
       const result = await endpoints.createKey({
         name: form.name.trim() || 'مفتاح جديد',
         group: form.group.trim() || 'default',
-        modelLimit: form.modelLimit
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line !== ''),
+        modelLimit: [],
         expiresAt: toEpochMs(form.expiresAt),
       });
       return result.key;
@@ -151,7 +161,7 @@ export function KeysPage() {
     <>
       <PageHeader
         title="مفاتيح API"
-        description="كل مفتاح يحدّد مجموعة ونماذج مسموحة للعميل"
+        description="كل مفتاح يوجّه طلبات تطبيقك إلى مجموعة القنوات المناسبة"
         action={
           <Button onClick={openCreate}>
             <Plus />
@@ -201,13 +211,15 @@ export function KeysPage() {
                       <span className="text-xs text-muted-foreground">يُعرض جزئياً فقط</span>
                     </div>
 
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {key.modelLimit.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">كل النماذج مسموحة</span>
-                      ) : (
-                        key.modelLimit.map((model) => <Badge key={model}>{model}</Badge>)
-                      )}
-                    </div>
+                    {/* New keys never set a limit — models come from the
+                        channels — so the row only appears for older keys. */}
+                    {key.modelLimit.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {key.modelLimit.map((model) => (
+                          <Badge key={model}>{model}</Badge>
+                        ))}
+                      </div>
+                    ) : null}
 
                     <p className="mt-2 text-xs text-muted-foreground">
                       {key.expiresAt ? `ينتهي ${formatDate(key.expiresAt)}` : 'بدون تاريخ انتهاء'} · آخر
@@ -244,7 +256,9 @@ export function KeysPage() {
         <SheetContent side="right" className="overflow-y-auto">
           <SheetHeader>
             <SheetTitle>مفتاح جديد</SheetTitle>
-            <SheetDescription>سيظهر المفتاح مرة واحدة فقط بعد الإنشاء.</SheetDescription>
+            <SheetDescription>
+              اسم وتاريخ انتهاء — هذا كل ما تحتاجه. النماذج المتاحة تُحدَّد من القنوات.
+            </SheetDescription>
           </SheetHeader>
 
           <form
@@ -282,20 +296,6 @@ export function KeysPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="key-models">النماذج المسموحة</Label>
-              <Textarea
-                id="key-models"
-                dir="ltr"
-                value={form.modelLimit}
-                onChange={(event) => setForm({ ...form, modelLimit: event.target.value })}
-                placeholder={'gpt-4o-mini\nclaude-sonnet-4'}
-              />
-              <p className="text-xs text-muted-foreground">
-                نموذج واحد في كل سطر. اتركه فارغاً للسماح بكل النماذج.
-              </p>
-            </div>
-
-            <div className="space-y-2">
               <Label htmlFor="key-expires">تاريخ الانتهاء</Label>
               <Input
                 id="key-expires"
@@ -304,7 +304,30 @@ export function KeysPage() {
                 value={form.expiresAt}
                 onChange={(event) => setForm({ ...form, expiresAt: event.target.value })}
               />
-              <p className="text-xs text-muted-foreground">اختياري — اتركه فارغاً لعدم الانتهاء.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {EXPIRY_PRESETS.map((preset) => (
+                  <Button
+                    key={preset.days}
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setForm({ ...form, expiresAt: expiryIn(preset.days) })}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setForm({ ...form, expiresAt: '' })}
+                >
+                  بدون انتهاء
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                اختياري — اتركه فارغاً ليعمل المفتاح بدون تاريخ انتهاء.
+              </p>
             </div>
 
             <SheetFooter className="px-0">
