@@ -1,20 +1,28 @@
-export type ChannelType = 'openai' | 'anthropic' | 'minimax' | 'generic';
+export type ChannelType = 'openai' | 'anthropic' | 'minimax' | 'generic' | 'custom';
 
 /** The channel kinds the gateway can actually route to. Mirrors `CHANNEL_TYPES`. */
-export const CHANNEL_TYPES = ['openai', 'anthropic', 'minimax', 'generic'] as const;
+export const CHANNEL_TYPES = ['openai', 'anthropic', 'minimax', 'generic', 'custom'] as const;
+
+/** How the key is presented upstream. Only `custom` reads it; built-ins ignore it. */
+export type AuthStyle = 'bearer' | 'x-api-key' | 'none';
 
 /**
- * The same four kinds, with labels, for the channel-type dropdown.
+ * The channel kinds, with labels, for the channel-type dropdown.
  *
  * The dropdown is fixed to these: a kind that is not one of them cannot be
  * typed, and the server rejects it too. The server's own list is preferred when
  * it loads, so a future adaptor appears without a dashboard change.
+ *
+ * `custom` is last because it is the escape hatch, not the default: it takes
+ * the endpoint exactly as typed and asks for the auth style and any extra
+ * headers, which is everything a provider that is none of the above needs.
  */
 export const CHANNEL_TYPE_OPTIONS: ChannelTypeOption[] = [
   { kind: 'openai', label: 'OpenAI', upstreamFormat: 'openai' },
   { kind: 'anthropic', label: 'Anthropic', upstreamFormat: 'claude' },
   { kind: 'minimax', label: 'MiniMax', upstreamFormat: 'openai' },
   { kind: 'generic', label: 'OpenAI-compatible', upstreamFormat: 'openai' },
+  { kind: 'custom', label: 'مخصّص (أي API خارجي)', upstreamFormat: 'openai' },
 ];
 
 /** What the server returns when it issues a dashboard session. */
@@ -58,6 +66,8 @@ export interface Channel {
   keyCount: number;
   models: string[];
   modelMapping: Record<string, string>;
+  authStyle: AuthStyle;
+  extraHeaders: Record<string, string>;
   group: string;
   priority: number;
   weight: number;
@@ -83,6 +93,8 @@ export interface ChannelPayload {
   keys: string[];
   models: string[];
   modelMapping: Record<string, string>;
+  authStyle: AuthStyle;
+  extraHeaders: Record<string, string>;
   group: string;
   priority: number;
   weight: number;
@@ -95,6 +107,10 @@ export interface ChannelTestResult {
   latencyMs: number | null;
   statusCode?: number;
   model?: string;
+  /** The base URL that answered — differs from the stored one when a probe resolved it. */
+  baseUrl?: string;
+  /** Operator-facing explanation shown alongside an upstream error. */
+  hint?: string;
 }
 
 export interface ApiKeyItem {

@@ -33,6 +33,7 @@ import { useToast } from '../../components/ui/toast';
 import { endpoints, queryKeys } from '../../lib/api';
 import {
   CHANNEL_TYPE_OPTIONS,
+  type AuthStyle,
   type Channel,
   type ChannelPayload,
   type ChannelTestResult,
@@ -56,6 +57,8 @@ const DEFAULT_FORM: ChannelFormState = {
   type: 'openai',
   baseUrl: '',
   keys: '',
+  authStyle: 'bearer',
+  extraHeaders: '',
   models: '',
   modelMapping: '',
   group: 'default',
@@ -69,12 +72,69 @@ interface ChannelFormState {
   type: ChannelType;
   baseUrl: string;
   keys: string;
+  authStyle: AuthStyle;
+  extraHeaders: string;
   models: string;
   modelMapping: string;
   group: string;
   priority: string;
   weight: string;
   enabled: boolean;
+}
+
+/**
+ * What the endpoint field means, per channel kind.
+ *
+ * The built-in kinds append their own path, so the field wants a root and
+ * pasting the full endpoint is the classic 404. `custom` is the opposite: it
+ * calls the URL exactly as typed. Saying which one applies, next to the field,
+ * is cheaper than explaining it after a failed test.
+ */
+const ENDPOINT_HELP: Record<ChannelType, { label: string; placeholder: string; help: string }> = {
+  openai: {
+    label: 'Base URL',
+    placeholder: 'https://api.openai.com/v1',
+    help: 'الجذر فقط — البوابة تضيف /chat/completions بنفسها.',
+  },
+  anthropic: {
+    label: 'Base URL',
+    placeholder: 'https://api.anthropic.com/v1',
+    help: 'الجذر فقط — البوابة تضيف /messages بنفسها.',
+  },
+  minimax: {
+    label: 'Base URL',
+    placeholder: 'https://api.minimaxi.com/v1',
+    help: 'الجذر فقط — البوابة تضيف /chat/completions بنفسها.',
+  },
+  generic: {
+    label: 'Base URL',
+    placeholder: 'https://api.example.com/v1',
+    help: 'الجذر فقط — البوابة تضيف /chat/completions بنفسها. اكتب https://api.example.com/v1 وليس .../v1/chat/completions.',
+  },
+  custom: {
+    label: 'Endpoint URL (المسار الكامل)',
+    placeholder: 'https://api.example.com/v1/chat/completions',
+    help: 'يُستخدَم كما تكتبه تماماً دون أي إضافة. انسخ المسار الكامل من وثائق المزوّد.',
+  },
+};
+
+/** `Name: value` lines → header object. Unparseable lines are skipped. */
+function toHeaders(value: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim();
+    const colon = trimmed.indexOf(':');
+    if (trimmed === '' || colon <= 0) continue;
+    const name = trimmed.slice(0, colon).trim();
+    if (name !== '') out[name] = trimmed.slice(colon + 1).trim();
+  }
+  return out;
+}
+
+function headersToText(headers: Record<string, string>): string {
+  return Object.entries(headers)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('\n');
 }
 
 /** Newline-separated text → trimmed, de-duplicated array. */
@@ -172,6 +232,7 @@ export function ChannelsPage() {
   const formModels = toList(form.models);
   const formMapping = parseMapping(form.modelMapping);
   const mappingError = firstMappingError(form.modelMapping);
+  const endpointHelp = ENDPOINT_HELP[form.type];
 
   const channelTypes: ChannelTypeOption[] =
     types.data?.data && types.data.data.length > 0 ? types.data.data : CHANNEL_TYPE_OPTIONS;
@@ -197,6 +258,8 @@ export function ChannelsPage() {
       // Keys are never returned by the API; leaving this blank keeps the
       // stored ones intact.
       keys: '',
+      authStyle: channel.authStyle ?? 'bearer',
+      extraHeaders: headersToText(channel.extraHeaders ?? {}),
       models: channel.models.join('\n'),
       modelMapping: mappingToText(channel.modelMapping),
       group: channel.group,
@@ -251,6 +314,8 @@ export function ChannelsPage() {
         keys: toList(form.keys),
         models: toList(form.models),
         modelMapping: toMapping(form.modelMapping),
+        authStyle: form.authStyle,
+        extraHeaders: toHeaders(form.extraHeaders),
         group: form.group.trim() || 'default',
         priority: Number.parseInt(form.priority, 10) || 0,
         weight: Number.parseInt(form.weight, 10) || 0,
@@ -391,6 +456,9 @@ export function ChannelsPage() {
                           {ping.model ? <span>· {ping.model}</span> : null}
                         </p>
                       ) : null}
+                      {ping?.hint ? (
+                        <p className="mt-1 text-xs text-amber-500">{ping.hint}</p>
+                      ) : null}
                       {channel.lastError ? (
                         <p className="mt-2 text-xs text-red-500">{channel.lastError}</p>
                       ) : null}
@@ -519,20 +587,28 @@ export function ChannelsPage() {
                 ))}
               </Select>
               <p className="text-xs text-muted-foreground">
-                اختيار من الأنواع المدعومة فقط — لا يُقبل إدخال نوع يدوي.
+                اختيار من الأنواع المدعومة فقط — لا يُقبل إدخال نوع يدوي. اختر «مخصّص» لأي مزوّد
+                آخر: تكتب الرابط الكامل وطريقة المصادقة بنفسك.
               </p>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="channel-url">Base URL</Label>
+              <Label htmlFor="channel-url">{endpointHelp.label}</Label>
               <Input
                 id="channel-url"
                 dir="ltr"
                 value={form.baseUrl}
                 onChange={(event) => setForm({ ...form, baseUrl: event.target.value })}
-                placeholder="https://api.example.com/v1"
+                placeholder={endpointHelp.placeholder}
                 required
               />
+              <p className="text-xs text-muted-foreground">{endpointHelp.help}</p>
+              {form.type === 'custom' ? null : (
+                <p className="text-xs text-muted-foreground">
+                  إذا نسيت الجزء <code dir="ltr">/v1</code>، زر الفحص يجربه تلقائياً ويحفظ ما
+                  استجاب.
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -586,6 +662,58 @@ export function ChannelsPage() {
                 تُخزَّن مشفّرة ولا تُعرض مرة أخرى.
               </p>
             </div>
+
+            {/*
+              Only the custom kind needs these. It exists for providers that are
+              none of the built-ins — anything reachable over HTTP, paid or
+              free — so it asks for the two things the built-ins assume: how
+              the key is presented, and any headers the provider demands.
+            */}
+            {form.type === 'custom' ? (
+              <div className="space-y-5 rounded-lg border border-border bg-muted/30 p-4">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">متطلبات المزوّد المخصّص</p>
+                  <p className="text-xs text-muted-foreground">
+                    انقل هذه القيم من وثائق المزوّد كما هي. البوابة لا تعدّل الرابط ولا الترويسات
+                    عند هذا النوع، فيعمل مع أي API خارجي دون تقييد.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="channel-auth-style">كيف يُرسَل المفتاح</Label>
+                  <Select
+                    id="channel-auth-style"
+                    value={form.authStyle}
+                    onChange={(event) =>
+                      setForm({ ...form, authStyle: event.target.value as AuthStyle })
+                    }
+                  >
+                    <option value="bearer">Authorization: Bearer &lt;key&gt;</option>
+                    <option value="x-api-key">x-api-key: &lt;key&gt;</option>
+                    <option value="none">بدون ترويسة مصادقة</option>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    اختر «بدون ترويسة مصادقة» إن كان المفتاح يمرّ عبر الترويسات الإضافية أدناه.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="channel-headers">ترويسات إضافية (اختياري)</Label>
+                  <Textarea
+                    id="channel-headers"
+                    dir="ltr"
+                    value={form.extraHeaders}
+                    onChange={(event) => setForm({ ...form, extraHeaders: event.target.value })}
+                    placeholder={'X-Title: My App\nHTTP-Referer: https://myapp.example'}
+                    className="font-mono text-xs"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    سطر لكل ترويسة بالصيغة <code dir="ltr">الاسم: القيمة</code> — تُرسَل كما هي
+                    وتتجاوز أي قيمة افتراضية.
+                  </p>
+                </div>
+              </div>
+            ) : null}
 
             <div className="space-y-2">
               <div className="space-y-1">
