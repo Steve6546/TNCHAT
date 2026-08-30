@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { getAdaptor, listAdaptors } from '../adapters/index.js';
+import { getAdaptor, listAdaptors, normalizeBaseUrl } from '../adapters/index.js';
 import { CHANNEL_TYPES } from '../adapters/types.js';
 import type { ChannelType } from '../adapters/types.js';
 import { config } from '../config.js';
@@ -74,7 +74,11 @@ function parseChannelInput(body: unknown, partial: boolean): Partial<ChannelInpu
 
   if (!partial || source['name'] !== undefined) out.name = v.str(source['name'], 'name', { min: 1, max: 120 });
   if (!partial || source['type'] !== undefined) out.type = v.oneOf(source['type'], 'type', CHANNEL_TYPES);
-  if (!partial || source['baseUrl'] !== undefined) out.baseUrl = v.requireUrl(source['baseUrl'], 'baseUrl');
+  if (!partial || source['baseUrl'] !== undefined) {
+    // Normalised on the way in as well as on the way out, so the field shows
+    // the root the gateway will actually call and not the pasted endpoint.
+    out.baseUrl = normalizeBaseUrl(v.requireUrl(source['baseUrl'], 'baseUrl'));
+  }
   if (!partial || source['keys'] !== undefined) out.keys = v.strArray(source['keys'], 'keys', 50);
   if (!partial || source['models'] !== undefined) out.models = v.strArray(source['models'], 'models');
   if (!partial || source['modelMapping'] !== undefined) out.modelMapping = v.record(source['modelMapping'], 'modelMapping');
