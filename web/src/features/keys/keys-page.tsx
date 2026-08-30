@@ -31,7 +31,7 @@ import {
 import { Skeleton } from '../../components/ui/skeleton';
 import { Switch } from '../../components/ui/switch';
 import { useToast } from '../../components/ui/toast';
-import { endpoints, queryKeys } from '../../lib/api';
+import { endpoints, queryKeys, relayEndpoint } from '../../lib/api';
 import type { ApiKeyItem } from '../../lib/types';
 import { errorMessage, formatDate, toEpochMs } from '../../lib/utils';
 
@@ -50,6 +50,16 @@ interface KeyFormState {
   group: string;
   modelLimit: string;
   expiresAt: string;
+}
+
+/**
+ * Everything a client application needs, ready to paste.
+ *
+ * The key alone is useless without the address to send it to, and the two are
+ * always retyped together — so they are copied together.
+ */
+function keyWithEndpoint(key: string): string {
+  return `API Key: ${key}\nEndpoint: ${relayEndpoint()}`;
 }
 
 function isExpired(key: ApiKeyItem): boolean {
@@ -324,10 +334,17 @@ export function KeysPage() {
             <code className="block break-all text-sm" dir="ltr">
               {revealed}
             </code>
+            <p className="mt-2 text-xs text-muted-foreground" dir="ltr">
+              Endpoint: {relayEndpoint()}
+            </p>
           </div>
 
           <DialogFooter>
-            <CopyButton value={revealed ?? ''} label="نسخ المفتاح" />
+            <CopyButton
+              value={keyWithEndpoint(revealed ?? '')}
+              label="نسخ المفتاح + Endpoint"
+              onCopied={() => toast.success('تم نسخ المفتاح مع رابط Endpoint')}
+            />
             <Button variant="outline" onClick={() => setRevealed(null)}>
               تم، إغلاق
             </Button>

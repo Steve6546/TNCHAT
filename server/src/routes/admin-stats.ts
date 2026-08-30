@@ -1,7 +1,10 @@
-import { sql } from 'drizzle-orm';
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import { eq, sql } from 'drizzle-orm';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { GatewayError } from '../core/errors.js';
 import { db } from '../db/index.js';
+import { requestLogs } from '../db/schema.js';
+import * as v from '../lib/validate.js';
 
 /**
  * Dashboard statistics.
@@ -36,6 +39,32 @@ interface BreakdownRow {
   errors: number;
 }
 
+interface RecentRow {
+  id: number;
+  model: string;
+  upstream_model: string;
+  channel_name: string;
+  client_format: string;
+  upstream_format: string;
+  total_tokens: number;
+  status_code: number;
+  ok: number;
+  latency_ms: number;
+  is_stream: number;
+  error_message: string | null;
+  created_at: number;
+}
+
+export const LOG_SCOPES = ['errors', 'all'] as const;
+
+/** `?ok=1` keeps successful rows only, `?ok=0` keeps failures. Absent = both. */
+export function parseOkFilter(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (value === '1' || value === 'true') return true;
+  if (value === '0' || value === 'false') return false;
+  throw GatewayError.badRequest('Query "ok" must be 1 or 0', 'ok');
+}
+
 function startOfToday(): number {
   const now = new Date();
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -46,7 +75,8 @@ function round(value: number): number {
 }
 
 export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/api/stats/overview', async (_request, reply: FastifyReply) => {
+  app.get('/api/stats/overview', async (request: FastifyRequest, reply: FastifyReply) => {
+    const okFilter = parseOkFilter((request.query as Record<string, unknown> | null)?.['ok']);
     const today = startOfToday();
     const since = today - 13 * 24 * 60 * 60 * 1000;
 
@@ -117,27 +147,18 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
       LIMIT 20
     `);
 
-    const recent = db.all<{
-      id: number;
-      model: string;
-      upstream_model: string;
-      channel_name: string;
-      client_format: string;
-      upstream_format: string;
-      total_tokens: number;
-      status_code: number;
-      ok: number;
-      latency_ms: number;
-      is_stream: number;
-      error_message: string | null;
-      created_at: number;
-    }>(sql`
+    // Only the recent-requests table is filtered. The headline metrics stay
+    // unfiltered so "requests today" never changes when someone toggles a view.
+    const columns = sql`
       SELECT id, model, upstream_model, channel_name, client_format, upstream_format,
              total_tokens, status_code, ok, latency_ms, is_stream, error_message, created_at
       FROM request_logs
-      ORDER BY id DESC
-      LIMIT 25
-    `);
+    `;
+
+    const recent =
+      okFilter === undefined
+        ? db.all<RecentRow>(sql`${columns} ORDER BY id DESC LIMIT 25`)
+        : db.all<RecentRow>(sql`${columns} WHERE ok = ${okFilter ? 1 : 0} ORDER BY id DESC LIMIT 25`);
 
     const todayRequests = totals?.requests ?? 0;
     const todaySuccesses = totals?.successes ?? 0;
@@ -199,5 +220,28 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
         })),
       },
     });
+  });
+
+  /**
+   * Log housekeeping.
+   *
+   * `scope=errors` is the default because that is the only case anyone asks
+   * for: a run of 502/503 from one bad channel buries the useful rows, and the
+   * successes are what you actually want to keep reading. `scope=all` resets
+   * the dashboard's history entirely.
+   *
+   * Deleting rows does not affect routing — abilities are built from channels,
+   * not from logs.
+   */
+  app.delete('/api/stats/logs', async (request: FastifyRequest, reply: FastifyReply) => {
+    const query = (request.query ?? {}) as Record<string, unknown>;
+    const scope = query['scope'] === undefined ? 'errors' : v.oneOf(query['scope'], 'scope', LOG_SCOPES);
+
+    const result =
+      scope === 'all'
+        ? db.delete(requestLogs).run()
+        : db.delete(requestLogs).where(eq(requestLogs.ok, false)).run();
+
+    return reply.send({ ok: true, deleted: result.changes });
   });
 }

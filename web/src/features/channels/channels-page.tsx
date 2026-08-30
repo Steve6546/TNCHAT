@@ -31,8 +31,16 @@ import { Skeleton } from '../../components/ui/skeleton';
 import { Switch } from '../../components/ui/switch';
 import { useToast } from '../../components/ui/toast';
 import { endpoints, queryKeys } from '../../lib/api';
-import type { Channel, ChannelPayload, ChannelType, ChannelTypeOption } from '../../lib/types';
-import { cn, errorMessage, formatDate } from '../../lib/utils';
+import {
+  CHANNEL_TYPE_OPTIONS,
+  type Channel,
+  type ChannelPayload,
+  type ChannelTestResult,
+  type ChannelType,
+  type ChannelTypeOption,
+} from '../../lib/types';
+import { cn, errorMessage, formatDate, formatLatency } from '../../lib/utils';
+import { ModelCards } from './model-cards';
 
 /**
  * Channels (labelled "Models" in the navigation).
@@ -74,17 +82,56 @@ function toList(value: string): string[] {
   return [...new Set(value.split('\n').map((line) => line.trim()).filter((line) => line !== ''))];
 }
 
-/** `from -> to` lines → mapping object. Rejects malformed lines loudly. */
-function toMapping(value: string): Record<string, string> {
-  const out: Record<string, string> = {};
+/**
+ * The only separator the mapping accepts.
+ *
+ * A plain space between two model names is the mistake this exists to catch:
+ * it looks right, it saves, and it silently produces a channel that advertises
+ * one model nobody can request.
+ */
+const MAPPING_ARROW = '->';
+
+/** One mapping line → an error message, or `null` when the line is valid. */
+function mappingLineError(line: string): string | null {
+  if (!line.includes(MAPPING_ARROW)) {
+    return `استخدم السهم ${MAPPING_ARROW} بدلاً من المسافة: «${line}» — مثال: claude-3-5-sonnet -> MiniMaxAI/MiniMax-M3`;
+  }
+  const [from, to] = line.split(MAPPING_ARROW).map((part) => part.trim());
+  if (!from || !to) return `التحويل ناقص على جانب واحد على الأقل: «${line}»`;
+  return null;
+}
+
+/** First offending line in a whole textarea, or `null` when it is clean. */
+function firstMappingError(value: string): string | null {
   for (const line of value.split('\n')) {
     const trimmed = line.trim();
     if (trimmed === '') continue;
-    const [from, to] = trimmed.split('->').map((part) => part.trim());
-    if (!from || !to) throw new Error(`سطر غير صحيح في تحويل النماذج: "${trimmed}"`);
-    out[from] = to;
+    const error = mappingLineError(trimmed);
+    if (error !== null) return error;
+  }
+  return null;
+}
+
+/**
+ * Lenient parse for live form state: malformed lines are skipped rather than
+ * thrown, so the cards keep working while a line is half-typed.
+ */
+function parseMapping(value: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of value.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed === '' || mappingLineError(trimmed) !== null) continue;
+    const [from, to] = trimmed.split(MAPPING_ARROW).map((part) => part.trim());
+    out[from!] = to!;
   }
   return out;
+}
+
+/** Same parse, but refuses to save a single malformed line. */
+function toMapping(value: string): Record<string, string> {
+  const error = firstMappingError(value);
+  if (error !== null) throw new Error(error);
+  return parseMapping(value);
 }
 
 function mappingToText(mapping: Record<string, string>): string {
@@ -115,9 +162,19 @@ export function ChannelsPage() {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<Channel | null>(null);
   const [testingId, setTestingId] = useState<number | null>(null);
+  const [pingResults, setPingResults] = useState<Record<number, ChannelTestResult>>({});
 
   const channels = useQuery({ queryKey: queryKeys.channels, queryFn: endpoints.channels });
   const types = useQuery({ queryKey: queryKeys.channelTypes, queryFn: endpoints.channelTypes, staleTime: Infinity });
+
+  // Both derived from the same text the textareas hold, so the cards and the
+  // raw fields can never disagree.
+  const formModels = toList(form.models);
+  const formMapping = parseMapping(form.modelMapping);
+  const mappingError = firstMappingError(form.modelMapping);
+
+  const channelTypes: ChannelTypeOption[] =
+    types.data?.data && types.data.data.length > 0 ? types.data.data : CHANNEL_TYPE_OPTIONS;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.channels });
@@ -149,6 +206,26 @@ export function ChannelsPage() {
     });
     setAdvancedOpen(false);
     setSheetOpen(true);
+  };
+
+  /**
+   * One card toggle → both fields.
+   *
+   * Activating a card advertises the alias (so clients can request it) and
+   * writes `alias -> upstream` only when the two names differ. Deactivating
+   * removes both. The arrow is produced here, never typed.
+   */
+  const applyCard = (alias: string, active: boolean, upstreamModel: string) => {
+    const nextMapping = { ...formMapping };
+    const nextModels = active
+      ? [...new Set([...formModels, alias])]
+      : formModels.filter((model) => model !== alias);
+
+    const target = upstreamModel.trim();
+    if (!active || target === '' || target === alias) delete nextMapping[alias];
+    else nextMapping[alias] = target;
+
+    setForm({ ...form, models: nextModels.join('\n'), modelMapping: mappingToText(nextMapping) });
   };
 
   const save = useMutation({
@@ -197,11 +274,16 @@ export function ChannelsPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
-  /** Sends a real request to the provider and reports the measured latency. */
+  /**
+   * Sends a real request to the provider and reports the measured latency.
+   * The result is also kept per channel so the row itself shows what came
+   * back, without a round trip through a toast the user has to remember.
+   */
   const test = async (channel: Channel) => {
     setTestingId(channel.id);
     try {
       const result = await endpoints.testChannel(channel.id);
+      setPingResults((current) => ({ ...current, [channel.id]: result }));
       if (result.ok) {
         toast.success(`الاتصال ناجح · ${result.latencyMs ?? 0} ms`);
       } else {
@@ -261,86 +343,104 @@ export function ChannelsPage() {
             />
           ) : (
             <ul className="divide-y divide-border">
-              {rows.map((channel) => (
-                <li key={channel.id} className="flex flex-wrap items-start gap-4 p-5">
-                  <div className="min-w-56 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="text-sm font-medium">{channel.name}</p>
-                      <Badge tone={statusTone(channel.status)}>{statusLabel(channel.status)}</Badge>
-                      {!channel.enabled ? <Badge>معطّلة</Badge> : null}
-                    </div>
-                    <p className="mt-1 truncate text-xs text-muted-foreground" dir="ltr">
-                      {channel.baseUrl}
-                    </p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {channel.models.length === 0 ? (
-                        <span className="text-xs text-muted-foreground">لا توجد نماذج</span>
-                      ) : (
-                        channel.models.map((model) => (
-                          <Badge key={model}>{model}</Badge>
-                        ))
-                      )}
-                    </div>
-                    {channel.lastError ? (
-                      <p className="mt-2 text-xs text-red-500">{channel.lastError}</p>
-                    ) : null}
-                  </div>
+              {rows.map((channel) => {
+                const ping = pingResults[channel.id];
 
-                  <div className="flex shrink-0 items-center gap-4">
-                    <div className="text-left">
-                      <p className="text-xs text-muted-foreground">آخر استجابة</p>
-                      <p className="text-sm tabular-nums" dir="ltr">
-                        {channel.lastLatencyMs == null ? '—' : `${channel.lastLatencyMs} ms`}
+                return (
+                  <li key={channel.id} className="flex flex-wrap items-start gap-4 p-5">
+                    <div className="min-w-56 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-medium">{channel.name}</p>
+                        <Badge tone={statusTone(channel.status)}>{statusLabel(channel.status)}</Badge>
+                        {!channel.enabled ? <Badge>معطّلة</Badge> : null}
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted-foreground" dir="ltr">
+                        {channel.baseUrl}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {channel.lastTestedAt ? formatDate(channel.lastTestedAt) : 'لم يُختبر'}
-                      </p>
-                    </div>
-
-                    <Switch
-                      checked={channel.enabled}
-                      onCheckedChange={(enabled) => toggle.mutate({ id: channel.id, enabled })}
-                      aria-label={channel.enabled ? 'تعطيل القناة' : 'تمكين القناة'}
-                    />
-
-                    <div className="flex items-center">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => void test(channel)}
-                        disabled={testingId === channel.id}
-                        aria-label="اختبار الاتصال"
-                        title="اختبار الاتصال"
-                      >
-                        {testingId === channel.id ? (
-                          <Activity className="animate-pulse" />
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {channel.models.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">لا توجد نماذج</span>
                         ) : (
-                          <Zap />
+                          channel.models.map((model) => (
+                            <Badge key={model}>{model}</Badge>
+                          ))
                         )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => openEdit(channel)}
-                        aria-label="تعديل القناة"
-                        title="تعديل"
-                      >
-                        <Pencil />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setPendingDelete(channel)}
-                        aria-label="حذف القناة"
-                        title="حذف"
-                        className="text-muted-foreground hover:text-red-500"
-                      >
-                        <Trash2 />
-                      </Button>
+                      </div>
+                      {ping ? (
+                        <p
+                          className={cn(
+                            'mt-2 flex flex-wrap items-center gap-x-1.5 text-xs',
+                            ping.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500',
+                          )}
+                          dir="ltr"
+                        >
+                          <span>{ping.ok ? 'استجابة سليمة' : 'فشل الفحص'}</span>
+                          {ping.statusCode !== undefined ? <span>· {ping.statusCode}</span> : null}
+                          <span>· {formatLatency(ping.latencyMs)}</span>
+                          {ping.model ? <span>· {ping.model}</span> : null}
+                        </p>
+                      ) : null}
+                      {channel.lastError ? (
+                        <p className="mt-2 text-xs text-red-500">{channel.lastError}</p>
+                      ) : null}
                     </div>
-                  </div>
-                </li>
-              ))}
+
+                    <div className="flex shrink-0 items-center gap-4">
+                      <div className="text-left">
+                        <p className="text-xs text-muted-foreground">آخر استجابة</p>
+                        <p className="text-sm tabular-nums" dir="ltr">
+                          {channel.lastLatencyMs == null ? '—' : `${channel.lastLatencyMs} ms`}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {channel.lastTestedAt ? formatDate(channel.lastTestedAt) : 'لم يُختبر'}
+                        </p>
+                      </div>
+
+                      <Switch
+                        checked={channel.enabled}
+                        onCheckedChange={(enabled) => toggle.mutate({ id: channel.id, enabled })}
+                        aria-label={channel.enabled ? 'تعطيل القناة' : 'تمكين القناة'}
+                      />
+
+                      <div className="flex items-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => void test(channel)}
+                          disabled={testingId === channel.id}
+                          aria-label="فحص الاتصال"
+                          title="فحص الاتصال"
+                        >
+                          {testingId === channel.id ? (
+                            <Activity className="animate-pulse" />
+                          ) : (
+                            <Zap />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(channel)}
+                          aria-label="تعديل القناة"
+                          title="تعديل"
+                        >
+                          <Pencil />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setPendingDelete(channel)}
+                          aria-label="حذف القناة"
+                          title="حذف"
+                          className="text-muted-foreground hover:text-red-500"
+                        >
+                          <Trash2 />
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </CardContent>
@@ -360,6 +460,13 @@ export function ChannelsPage() {
             className="flex-1 space-y-5 overflow-y-auto px-6 py-5"
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
+              // Caught here as well as in the mutation, so the field that is
+              // wrong is the one the user is shown.
+              if (mappingError !== null) {
+                setAdvancedOpen(true);
+                toast.error(mappingError);
+                return;
+              }
               try {
                 save.mutate();
               } catch (error) {
@@ -387,12 +494,15 @@ export function ChannelsPage() {
                 value={form.type}
                 onChange={(event) => setForm({ ...form, type: event.target.value as ChannelType })}
               >
-                {(types.data?.data ?? []).map((option: ChannelTypeOption) => (
+                {channelTypes.map((option: ChannelTypeOption) => (
                   <option key={option.kind} value={option.kind}>
                     {option.label}
                   </option>
                 ))}
               </Select>
+              <p className="text-xs text-muted-foreground">
+                اختيار من الأنواع المدعومة فقط — لا يُقبل إدخال نوع يدوي.
+              </p>
             </div>
 
             <div className="space-y-2">
@@ -435,6 +545,20 @@ export function ChannelsPage() {
               <p className="text-xs text-muted-foreground">نموذج واحد في كل سطر.</p>
             </div>
 
+            <div className="space-y-2">
+              <p className="text-sm font-medium">ربط النماذج بالبطاقات</p>
+              <p className="text-xs text-muted-foreground">
+                فعّل بطاقة ليُعلن عنها على هذه القناة، واكتب اسمها عند المزوّد إن اختلف — يكتب
+                النظام صيغة التحويل تلقائياً.
+              </p>
+              <ModelCards
+                models={formModels}
+                mapping={formMapping}
+                onToggle={applyCard}
+                onRetarget={(alias, upstreamModel) => applyCard(alias, true, upstreamModel)}
+              />
+            </div>
+
             <div className="rounded-lg border border-border">
               <button
                 type="button"
@@ -450,17 +574,23 @@ export function ChannelsPage() {
               {advancedOpen ? (
                 <div className="space-y-5 border-t border-border px-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="channel-mapping">تحويل النماذج</Label>
+                    <Label htmlFor="channel-mapping">تحويل النماذج (تحرير يدوي)</Label>
                     <Textarea
                       id="channel-mapping"
                       dir="ltr"
                       value={form.modelMapping}
                       onChange={(event) => setForm({ ...form, modelMapping: event.target.value })}
-                      placeholder={'gpt-4o -> gpt-4o-mini'}
+                      placeholder={'claude-3-5-sonnet -> MiniMaxAI/MiniMax-M3'}
+                      aria-invalid={mappingError !== null}
+                      className={mappingError !== null ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : undefined}
                     />
-                    <p className="text-xs text-muted-foreground">
-                      سطر لكل تحويل بالصيغة <code dir="ltr">من -&gt; إلى</code>
-                    </p>
+                    {mappingError !== null ? (
+                      <p className="text-xs text-red-500">{mappingError}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        سطر لكل تحويل بالصيغة <code dir="ltr">من -&gt; إلى</code>
+                      </p>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">

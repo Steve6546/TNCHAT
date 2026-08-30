@@ -14,10 +14,13 @@ export function CopyButton({
   value,
   label = 'نسخ',
   className,
+  onCopied,
 }: {
   value: string;
   label?: string;
   className?: string;
+  /** Fires after the value reaches the clipboard. */
+  onCopied?: () => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -38,6 +41,7 @@ export function CopyButton({
     }
 
     setCopied(true);
+    onCopied?.();
     setTimeout(() => setCopied(false), 1600);
   };
 
