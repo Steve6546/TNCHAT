@@ -9,8 +9,8 @@ import { Spinner } from '../../components/shared/spinner';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
+import { PasswordField } from '../../components/ui/password-field';
 import { Skeleton } from '../../components/ui/skeleton';
 import { useToast } from '../../components/ui/toast';
 import { endpoints, queryKeys } from '../../lib/api';
@@ -90,9 +90,8 @@ export function SettingsPage() {
             <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-2">
                 <Label htmlFor="current-password">كلمة المرور الحالية</Label>
-                <Input
+                <PasswordField
                   id="current-password"
-                  type="password"
                   autoComplete="current-password"
                   value={currentPassword}
                   onChange={(event) => setCurrentPassword(event.target.value)}
@@ -101,9 +100,8 @@ export function SettingsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="new-password">كلمة المرور الجديدة</Label>
-                <Input
+                <PasswordField
                   id="new-password"
-                  type="password"
                   autoComplete="new-password"
                   value={newPassword}
                   onChange={(event) => setNewPassword(event.target.value)}
@@ -113,9 +111,8 @@ export function SettingsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="confirm-password">تأكيد كلمة المرور</Label>
-                <Input
+                <PasswordField
                   id="confirm-password"
-                  type="password"
                   autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}

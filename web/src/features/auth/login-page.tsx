@@ -1,15 +1,17 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ArrowLeft, LockKeyhole } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { ArrowLeft, LockKeyhole, Timer } from 'lucide-react';
+import { useCallback, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 
+import { Countdown } from '../../components/shared/countdown';
 import { Logo } from '../../components/shared/logo';
 import { Spinner } from '../../components/shared/spinner';
 import { Button } from '../../components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card';
-import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
+import { PasswordField } from '../../components/ui/password-field';
 import { endpoints, queryKeys } from '../../lib/api';
+import { SESSION_LENGTH_MS } from '../../lib/session';
 import { errorMessage } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth-store';
 
@@ -20,6 +22,13 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [clientError, setClientError] = useState('');
+
+  // No session exists yet, so this previews how long one lasts. It restarts at
+  // the full length when it runs out, because every new session starts fresh.
+  const [sessionDeadline, setSessionDeadline] = useState(() => Date.now() + SESSION_LENGTH_MS);
+  const restartSessionTimer = useCallback(() => {
+    setSessionDeadline(Date.now() + SESSION_LENGTH_MS);
+  }, []);
 
   const status = useQuery({
     queryKey: queryKeys.authStatus,
@@ -82,9 +91,8 @@ export function LoginPage() {
               <form className="space-y-4" onSubmit={handleSubmit}>
                 <div className="space-y-2">
                   <Label htmlFor="password">كلمة المرور</Label>
-                  <Input
+                  <PasswordField
                     id="password"
-                    type="password"
                     autoComplete={configured ? 'current-password' : 'new-password'}
                     value={password}
                     onChange={(event) => setPassword(event.target.value)}
@@ -96,9 +104,8 @@ export function LoginPage() {
                 {!configured ? (
                   <div className="space-y-2">
                     <Label htmlFor="confirmation">تأكيد كلمة المرور</Label>
-                    <Input
+                    <PasswordField
                       id="confirmation"
-                      type="password"
                       autoComplete="new-password"
                       value={confirmation}
                       onChange={(event) => setConfirmation(event.target.value)}
@@ -119,7 +126,15 @@ export function LoginPage() {
             )}
           </CardContent>
         </Card>
-        <p className="mt-4 text-center text-xs text-muted-foreground">جلسة المسؤول صالحة لمدة 12 ساعة</p>
+        <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <Timer className="size-3.5" />
+          مدة الجلسة بعد الدخول
+          <Countdown
+            deadline={sessionDeadline}
+            className="font-medium text-foreground"
+            onExpire={restartSessionTimer}
+          />
+        </p>
       </div>
     </main>
   );
