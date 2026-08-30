@@ -10,6 +10,8 @@ import {
   verifyPassword,
   verifyToken,
   getStoredPasswordHash,
+  TOKEN_TTL_HOURS,
+  type IssuedToken,
 } from '../gateway/dashboard-auth.js';
 import { RateLimiter } from '../lib/rate-limit.js';
 import * as v from '../lib/validate.js';
@@ -48,9 +50,29 @@ function assertAllowed(request: FastifyRequest): void {
   );
 }
 
+/**
+ * Session payload shared by login and first-run setup.
+ *
+ * `expiresAt` and `serverTime` are ISO-8601 instants from the server's own
+ * clock, and they travel together on purpose: the dashboard subtracts the
+ * difference between them and its own `Date.now()` to correct for a skewed
+ * browser, then counts down to `expiresAt`. Without `serverTime` the countdown
+ * would silently drift by however wrong the client clock is.
+ */
+function sessionPayload(issued: IssuedToken) {
+  return {
+    token: issued.token,
+    expiresAt: new Date(issued.expiresAt).toISOString(),
+    serverTime: new Date().toISOString(),
+    expiresInHours: TOKEN_TTL_HOURS,
+  };
+}
+
 export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/auth/status', async (_request, reply: FastifyReply) => {
-    return reply.send({ data: { configured: isPasswordConfigured() } });
+    return reply.send({
+      data: { configured: isPasswordConfigured(), serverTime: new Date().toISOString() },
+    });
   });
 
   app.post('/api/auth/login', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -59,9 +81,9 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     const body = (request.body ?? {}) as Record<string, unknown>;
     const password = v.str(body['password'], 'password', { min: 1, max: 500 });
 
-    const token = login(password);
+    const issued = login(password);
     authLimiter.reset(clientKey(request));
-    return reply.send({ data: { token, expiresInHours: 12 } });
+    return reply.send({ data: sessionPayload(issued) });
   });
 
   app.post('/api/auth/setup', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -80,8 +102,7 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     setAdminPassword(password);
     authLimiter.reset(clientKey(request));
 
-    const token = login(password);
-    return reply.code(201).send({ data: { token, expiresInHours: 12 } });
+    return reply.code(201).send({ data: sessionPayload(login(password)) });
   });
 
   app.post('/api/auth/password', async (request: FastifyRequest, reply: FastifyReply) => {

@@ -1,5 +1,32 @@
 export type ChannelType = 'openai' | 'anthropic' | 'minimax' | 'generic';
 
+/** The channel kinds the gateway can actually route to. Mirrors `CHANNEL_TYPES`. */
+export const CHANNEL_TYPES = ['openai', 'anthropic', 'minimax', 'generic'] as const;
+
+/**
+ * The same four kinds, with labels, for the channel-type dropdown.
+ *
+ * The dropdown is fixed to these: a kind that is not one of them cannot be
+ * typed, and the server rejects it too. The server's own list is preferred when
+ * it loads, so a future adaptor appears without a dashboard change.
+ */
+export const CHANNEL_TYPE_OPTIONS: ChannelTypeOption[] = [
+  { kind: 'openai', label: 'OpenAI', upstreamFormat: 'openai' },
+  { kind: 'anthropic', label: 'Anthropic', upstreamFormat: 'claude' },
+  { kind: 'minimax', label: 'MiniMax', upstreamFormat: 'openai' },
+  { kind: 'generic', label: 'OpenAI-compatible', upstreamFormat: 'openai' },
+];
+
+/** What the server returns when it issues a dashboard session. */
+export interface SessionPayload {
+  token: string;
+  /** ISO-8601 instant — when the server stops accepting this token. */
+  expiresAt: string;
+  /** ISO-8601 instant — the server's own clock at issue time, for skew correction. */
+  serverTime: string;
+  expiresInHours: number;
+}
+
 /** Mirrors `safeConfigSummary()` on the server — safe to display anywhere. */
 export interface HealthInfo {
   ok: boolean;

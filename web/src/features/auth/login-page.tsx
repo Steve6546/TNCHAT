@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowLeft, LockKeyhole, Timer } from 'lucide-react';
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Navigate, useNavigate } from 'react-router-dom';
 
 import { Countdown } from '../../components/shared/countdown';
@@ -17,18 +17,11 @@ import { useAuthStore } from '../../stores/auth-store';
 
 export function LoginPage() {
   const token = useAuthStore((state) => state.token);
-  const setToken = useAuthStore((state) => state.setToken);
+  const setSession = useAuthStore((state) => state.setSession);
   const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [clientError, setClientError] = useState('');
-
-  // No session exists yet, so this previews how long one lasts. It restarts at
-  // the full length when it runs out, because every new session starts fresh.
-  const [sessionDeadline, setSessionDeadline] = useState(() => Date.now() + SESSION_LENGTH_MS);
-  const restartSessionTimer = useCallback(() => {
-    setSessionDeadline(Date.now() + SESSION_LENGTH_MS);
-  }, []);
 
   const status = useQuery({
     queryKey: queryKeys.authStatus,
@@ -36,11 +29,29 @@ export function LoginPage() {
     staleTime: 30_000,
   });
 
+  // No session exists yet, so this previews how long one lasts. It restarts at
+  // the full length when it runs out, because every new session starts fresh —
+  // and it starts from the server's clock, so the preview agrees with the
+  // countdown that appears once the session is real.
+  const serverTime = status.data?.data.serverTime;
+  const [sessionDeadline, setSessionDeadline] = useState(() => Date.now() + SESSION_LENGTH_MS);
+
+  useEffect(() => {
+    const instant = serverTime ? Date.parse(serverTime) : Number.NaN;
+    if (Number.isNaN(instant)) return;
+    setSessionDeadline(instant + SESSION_LENGTH_MS);
+  }, [serverTime]);
+
+  const restartSessionTimer = useCallback(() => {
+    const instant = serverTime ? Date.parse(serverTime) : Number.NaN;
+    setSessionDeadline((Number.isNaN(instant) ? Date.now() : instant) + SESSION_LENGTH_MS);
+  }, [serverTime]);
+
   const configured = status.data?.data.configured ?? true;
   const auth = useMutation({
     mutationFn: () => (configured ? endpoints.login(password) : endpoints.setup(password)),
     onSuccess: (response) => {
-      setToken(response.data.token);
+      setSession(response.data);
       navigate('/', { replace: true });
     },
   });

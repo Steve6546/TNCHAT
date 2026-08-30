@@ -14,7 +14,8 @@ import { constantTimeEqual } from '../lib/crypto.js';
  * credential and a short lifetime.
  */
 
-const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+export const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+export const TOKEN_TTL_HOURS = TOKEN_TTL_MS / (60 * 60 * 1000);
 const SETTINGS_KEY = 'admin_password_hash';
 
 export function hashPassword(password: string, salt = randomBytes(16).toString('hex')): string {
@@ -54,7 +55,13 @@ export function isPasswordConfigured(): boolean {
  * password has been set yet, so a fresh deployment is not locked out. Once a
  * password is stored in the database, the environment value is ignored.
  */
-export function login(password: string): string {
+export interface IssuedToken {
+  token: string;
+  /** Epoch milliseconds — the instant this token stops being accepted. */
+  expiresAt: number;
+}
+
+export function login(password: string): IssuedToken {
   const stored = getStoredPasswordHash();
 
   if (stored === null) {
@@ -85,10 +92,11 @@ function sign(payload: string): string {
   return createHmac('sha256', config.sessionSecret).update(payload).digest('base64url');
 }
 
-function issueToken(): string {
-  const payload: TokenPayload = { sub: 'admin', exp: Date.now() + TOKEN_TTL_MS };
+function issueToken(): IssuedToken {
+  const expiresAt = Date.now() + TOKEN_TTL_MS;
+  const payload: TokenPayload = { sub: 'admin', exp: expiresAt };
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  return `${body}.${sign(body)}`;
+  return { token: `${body}.${sign(body)}`, expiresAt };
 }
 
 export function verifyToken(token: string | null): boolean {

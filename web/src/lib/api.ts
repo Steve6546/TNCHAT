@@ -1,5 +1,14 @@
 import { useAuthStore } from '../stores/auth-store';
-import type { ApiKeyItem, Channel, ChannelPayload, ChannelTestResult, ChannelTypeOption, HealthInfo, StatsOverview } from './types';
+import type {
+  ApiKeyItem,
+  Channel,
+  ChannelPayload,
+  ChannelTestResult,
+  ChannelTypeOption,
+  HealthInfo,
+  SessionPayload,
+  StatsOverview,
+} from './types';
 
 interface ApiErrorBody {
   error?: {
@@ -61,14 +70,14 @@ const json = (body: unknown) => JSON.stringify(body);
 export const endpoints = {
   health: () => api<HealthInfo>('/health'),
 
-  authStatus: () => api<{ data: { configured: boolean } }>('/api/auth/status'),
+  authStatus: () => api<{ data: { configured: boolean; serverTime: string } }>('/api/auth/status'),
   login: (password: string) =>
-    api<{ data: { token: string; expiresInHours: number } }>('/api/auth/login', {
+    api<{ data: SessionPayload }>('/api/auth/login', {
       method: 'POST',
       body: json({ password }),
     }),
   setup: (password: string) =>
-    api<{ data: { token: string; expiresInHours: number } }>('/api/auth/setup', {
+    api<{ data: SessionPayload }>('/api/auth/setup', {
       method: 'POST',
       body: json({ password }),
     }),
@@ -95,8 +104,39 @@ export const endpoints = {
     api<{ data: ApiKeyItem }>(`/api/keys/${id}`, { method: 'PATCH', body: json(payload) }),
   deleteKey: (id: number) => api<{ ok: boolean }>(`/api/keys/${id}`, { method: 'DELETE' }),
 
-  statsOverview: () => api<{ data: StatsOverview }>('/api/stats/overview'),
+  statsOverview: (filter: LogFilter = {}) =>
+    api<{ data: StatsOverview }>(`/api/stats/overview${queryString(filter)}`),
+  clearLogs: (scope: LogScope) =>
+    api<{ ok: boolean; deleted: number }>(`/api/stats/logs?scope=${scope}`, { method: 'DELETE' }),
 };
+
+/** `all` is every request ever logged; `errors` is only the failed ones. */
+export type LogScope = 'errors' | 'all';
+
+export interface LogFilter {
+  /** `true` keeps 200 OK rows only, `false` keeps failures only. Omit for both. */
+  ok?: boolean;
+}
+
+function queryString(filter: LogFilter): string {
+  if (filter.ok === undefined) return '';
+  return `?ok=${filter.ok ? '1' : '0'}`;
+}
+
+/**
+ * The relay base URL a client application needs.
+ *
+ * Taken from the page's own origin so it always matches the host and port the
+ * gateway is actually served from; the literal fallback only applies when the
+ * bundle is opened outside a browser context.
+ */
+export function relayEndpoint(): string {
+  const fallback = 'http://127.0.0.1:8787';
+  if (typeof window === 'undefined') return `${fallback}/v1`;
+  const { origin, protocol } = window.location;
+  if (protocol !== 'http:' && protocol !== 'https:') return `${fallback}/v1`;
+  return `${origin}/v1`;
+}
 
 /** Query keys, centralised so invalidation cannot drift from the fetcher. */
 export const queryKeys = {
