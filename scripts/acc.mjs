@@ -216,13 +216,20 @@ function ensureEnv() {
 
   copyFileSync(examplePath, envPath);
   ok('created .env from .env.example');
-  warn('It contains a placeholder ADMIN_PASSWORD — the dashboard will ask you to set a real one.');
+  warn('ADMIN_PASSWORD is empty by design — the dashboard will ask you to create one.');
 }
 
+/**
+ * Full database preparation: schema, routing index, and the one-time promotion
+ * of ADMIN_PASSWORD into the database when an operator has set one.
+ *
+ * `src/db/migrate.ts` remains the schema-only primitive (that is what
+ * `acc.mjs db` runs); this is the entry point for everything that boots.
+ */
 async function migrate() {
   step('Preparing the database');
-  await run(node, tsx(['src/db/migrate.ts']), { cwd: SERVER_DIR });
-  ok('schema up to date');
+  await run(node, tsx(['src/db/bootstrap.ts']), { cwd: SERVER_DIR });
+  ok('database ready');
 }
 
 /* ────────────────────────────────────────────────────────────
@@ -428,7 +435,10 @@ async function commandDb() {
   checkNodeVersion();
   await ensureInstalled();
   ensureEnv();
-  await migrate();
+  // Schema only — no routing index, no password promotion.
+  step('Applying the database schema');
+  await run(node, tsx(['src/db/migrate.ts']), { cwd: SERVER_DIR });
+  ok('schema up to date');
 }
 
 async function commandReset() {

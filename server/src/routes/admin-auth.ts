@@ -67,7 +67,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/auth/setup', async (request: FastifyRequest, reply: FastifyReply) => {
     assertAllowed(request);
 
-    if (getStoredPasswordHash() !== null) {
+    // Gate on the same predicate /api/auth/status reports, so the UI can never
+    // be told "already configured" while setup is still open — that mismatch
+    // let a deployment keep a password nobody knowingly chose.
+    if (isPasswordConfigured()) {
       throw GatewayError.forbidden('An admin password is already configured');
     }
 
