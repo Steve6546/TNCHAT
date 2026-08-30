@@ -85,6 +85,7 @@ async function handleRelay(
       auth,
       sink,
       signal: abort.signal,
+      clientHeaders: request.headers as Record<string, unknown>,
     });
   } catch (error) {
     if (reply.raw.writableEnded || reply.sent) return;

@@ -1,4 +1,43 @@
 import { GatewayError } from '../core/errors.js';
+import { RelayFormat } from '../core/formats.js';
+
+/**
+ * Client headers that are replayed to the provider, by upstream wire format.
+ *
+ * `anthropic-beta` is how a client opts into gated abilities — Claude Code
+ * sends `interleaved-thinking-2025-05-14` and friends on every request.
+ * Dropping it silently downgrades the call: the request still succeeds, but
+ * extended thinking and the tool versions behind the beta flag are refused or
+ * ignored upstream.
+ *
+ * The list is an allow-list rather than a block-list on purpose. Blindly
+ * replaying client headers would leak the caller's `authorization` to the
+ * provider and forward hop-by-hop headers that Node manages itself.
+ *
+ * Anthropic-only: an OpenAI-compatible endpoint has no `anthropic-version`
+ * contract, and several providers reject requests carrying unknown headers.
+ */
+const ANTHROPIC_PASSTHROUGH_HEADERS = ['anthropic-version', 'anthropic-beta'] as const;
+
+/**
+ * Pick the client headers worth forwarding for this upstream.
+ *
+ * Returns an empty object whenever nothing applies, so callers can spread the
+ * result without a conditional.
+ */
+export function clientPassthroughHeaders(
+  clientHeaders: Record<string, unknown> | undefined,
+  upstreamFormat: RelayFormat,
+): Record<string, string> {
+  if (upstreamFormat !== RelayFormat.Claude) return {};
+
+  const forwarded: Record<string, string> = {};
+  for (const name of ANTHROPIC_PASSTHROUGH_HEADERS) {
+    const value = clientHeaders?.[name.toLowerCase()];
+    if (typeof value === 'string' && value.trim() !== '') forwarded[name] = value;
+  }
+  return forwarded;
+}
 
 /**
  * Outbound HTTP + SSE reading.

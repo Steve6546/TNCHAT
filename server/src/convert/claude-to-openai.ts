@@ -6,6 +6,7 @@ import type {
   ClaudeRequest,
   ClaudeResponse,
   ClaudeStreamEvent,
+  ClaudeTool,
   ClaudeUsage,
 } from './dto/claude.js';
 import type {
@@ -14,6 +15,7 @@ import type {
   OpenAIResponse,
   OpenAIStreamChoice,
   OpenAIStreamChunk,
+  OpenAITool,
   OpenAIToolCall,
 } from './dto/openai.js';
 
@@ -24,10 +26,20 @@ import type {
  * explicitly rather than hidden):
  *   - `top_k` has no OpenAI equivalent and is dropped.
  *   - Extended `thinking` blocks have no OpenAI request equivalent. They are
- *     dropped on request; on response they are surfaced as reasoning content
- *     where the upstream emits them.
+ *     dropped on request; the budget is translated into `reasoning_effort`
+ *     below so the *intent* survives even though the exact token budget cannot.
  *   - Claude `tool_result` blocks become separate `role: "tool"` messages, so a
  *     single Claude message can expand into several OpenAI messages.
+ *
+ * Claude Code compatibility is the reason the conversion below is more careful
+ * than a plain field rename:
+ *   - `output_config.effort` (and, failing that, `thinking.budget_tokens`)
+ *     becomes `reasoning_effort`, so "think harder" is not silently lost.
+ *   - Tools carrying an Anthropic built-in `type` (`computer_20250124`,
+ *     `bash_20250124`, `text_editor_20250124`, `web_search_20250305`, …) are
+ *     forwarded verbatim. Rewriting them into `{type: "function"}` would delete
+ *     the fields the provider actually reads — `display_width_px`,
+ *     `display_height_px`, `display_number` — and break computer use entirely.
  */
 
 function claudeSystemToText(system: string | ClaudeMediaMessage[] | undefined): string | null {
@@ -53,6 +65,75 @@ function imageSourceToDataUrl(
 
 function textOfTextBlock(block: ClaudeContentBlock): string | null {
   return block.type === 'text' ? (block.text ?? '') : null;
+}
+
+/**
+ * Translate Claude's effort controls into OpenAI's single `reasoning_effort`.
+ *
+ * `output_config.effort` is explicit and wins. Otherwise the thinking budget is
+ * the only signal available; the thresholds are deliberately coarse because
+ * they are a hint, not a contract — the exact budget has no OpenAI equivalent
+ * and inventing a precise mapping would imply a fidelity that is not there.
+ */
+function reasoningEffortFrom(request: ClaudeRequest): 'low' | 'medium' | 'high' | null {
+  const effort = (request.output_config as { effort?: unknown } | null | undefined)?.effort;
+  if (effort === 'low' || effort === 'medium' || effort === 'high') return effort;
+
+  const budget = request.thinking?.budget_tokens;
+  if (typeof budget !== 'number' || !Number.isFinite(budget)) return null;
+  if (budget >= 8000) return 'high';
+  if (budget >= 2000) return 'medium';
+  return 'low';
+}
+
+/**
+ * Anthropic tool types that map onto OpenAI `function` tools, i.e. the ones we
+ * are allowed to rewrite. Anything else is a provider-side built-in.
+ */
+const FUNCTION_TOOL_TYPES = new Set(['', 'custom', 'function']);
+
+/**
+ * One Claude tool -> one OpenAI tool.
+ *
+ * The two branches are not symmetrical on purpose:
+ *
+ *  - A plain tool (no `type`, or `type: "custom"`) is rewritten into
+ *    `{type: "function"}`, unchanged from before. OpenAI validates tool objects
+ *    strictly, so Anthropic-only extras such as `cache_control` are *not*
+ *    forwarded here — carrying them across would turn a working call into a
+ *    400 for the sake of a field OpenAI cannot act on anyway.
+ *
+ *  - A built-in carries its own schema (`computer_20250124` with
+ *    `display_width_px`, `web_search_20250305` with `max_uses`, …) and is
+ *    forwarded verbatim. Rewriting it would strip exactly the fields the
+ *    provider reads, which is how computer use silently stops working.
+ */
+function toOpenAITool(tool: ClaudeTool): OpenAITool {
+  const { name, description, input_schema: inputSchema, ...rest } = tool as ClaudeTool & {
+    type?: unknown;
+  } & Record<string, unknown>;
+
+  const extras = Object.fromEntries(Object.entries(rest).filter(([key]) => key !== 'type'));
+  const declaredType = typeof rest['type'] === 'string' ? (rest['type'] as string) : '';
+
+  if (FUNCTION_TOOL_TYPES.has(declaredType)) {
+    return {
+      type: 'function',
+      function: {
+        name,
+        ...(description !== undefined ? { description } : {}),
+        parameters: (inputSchema ?? { type: 'object', properties: {} }) as Record<string, unknown>,
+      },
+    };
+  }
+
+  return {
+    ...extras,
+    type: declaredType,
+    name,
+    ...(description !== undefined ? { description } : {}),
+    ...(inputSchema !== undefined ? { input_schema: inputSchema } : {}),
+  } as unknown as OpenAITool;
 }
 
 interface OpenAIMessageLike {
@@ -165,16 +246,13 @@ export function convertClaudeRequestToOpenAI(request: ClaudeRequest): OpenAIRequ
   if (request.stop_sequences?.length) openai.stop = request.stop_sequences;
   if (request.stream !== undefined) openai.stream = request.stream;
   if (request.metadata?.user_id) openai.user = request.metadata.user_id;
+  if (request.service_tier !== undefined) openai.service_tier = request.service_tier;
+
+  const reasoningEffort = reasoningEffortFrom(request);
+  if (reasoningEffort !== null) openai.reasoning_effort = reasoningEffort;
 
   if (request.tools?.length) {
-    openai.tools = request.tools.map((tool) => ({
-      type: 'function' as const,
-      function: {
-        name: tool.name,
-        ...(tool.description !== undefined ? { description: tool.description } : {}),
-        parameters: (tool.input_schema ?? { type: 'object', properties: {} }) as Record<string, unknown>,
-      },
-    }));
+    openai.tools = request.tools.map((tool) => toOpenAITool(tool));
   }
 
   if (request.tool_choice) {

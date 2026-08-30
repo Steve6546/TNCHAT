@@ -22,7 +22,7 @@ import { parseStringList } from '../lib/json.js';
 import { decryptKeyList } from '../lib/secrets.js';
 import { selectChannel, getPreferredChannel, recordChannelAffinity, clearChannelAffinity } from './distributor.js';
 import { parseModelMapping, resolveModelMapping } from './model-mapping.js';
-import { readSSE, callUpstream, upstreamError } from './upstream.js';
+import { clientPassthroughHeaders, readSSE, callUpstream, upstreamError } from './upstream.js';
 import type { AuthContext } from './token-auth.js';
 
 /**
@@ -52,6 +52,8 @@ export interface RelayRequest {
   auth: AuthContext;
   sink: RelaySink;
   signal?: AbortSignal;
+  /** Raw inbound headers, so beta opt-ins can be replayed upstream. */
+  clientHeaders?: Record<string, unknown>;
 }
 
 interface ChannelRecord {
@@ -291,7 +293,12 @@ async function attemptStreamingOrJson(args: AttemptArgs): Promise<RelayOutcome> 
 
   const apiKey = nextKey(channel);
   const url = adaptor.buildUrl(channel.baseUrl);
-  const headers = adaptor.buildHeaders(apiKey);
+  const headers = {
+    ...adaptor.buildHeaders(apiKey),
+    // Client opt-ins win over the adaptor's defaults: a client that asks for
+    // a newer `anthropic-version` knows more about what it needs than we do.
+    ...clientPassthroughHeaders(request.clientHeaders, adaptor.upstreamFormat),
+  };
 
   const timeoutMs = request.isStream ? config.streamingTimeoutMs : config.requestTimeoutMs;
   const response = await callUpstream({ url, headers, body: upstreamPayload, timeoutMs, signal });

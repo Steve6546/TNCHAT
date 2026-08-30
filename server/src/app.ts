@@ -51,7 +51,16 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(cors, {
     origin: config.corsOrigin,
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'anthropic-version'],
+    // `anthropic-beta` carries the gated-ability opt-ins (interleaved
+    // thinking, the Claude Code tool versions). Without it a browser client
+    // cannot send them at all; the preflight rejects the header.
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'x-api-key',
+      'anthropic-version',
+      'anthropic-beta',
+    ],
   });
 
   /**
