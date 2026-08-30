@@ -168,6 +168,11 @@ export async function readUpstreamError(response: Response): Promise<string> {
       const message = (error as Record<string, unknown>)['message'];
       if (typeof message === 'string') return message;
     }
+    // FastAPI — and the many OpenAI-compatible gateways built on it — report
+    // failures as `{"detail": "Not Found"}`. Without this branch the operator
+    // is shown that raw JSON, which tells them nothing about what to fix.
+    const detail = parsed['detail'];
+    if (typeof detail === 'string') return detail;
     const message = parsed['message'];
     if (typeof message === 'string') return message;
   } catch {
