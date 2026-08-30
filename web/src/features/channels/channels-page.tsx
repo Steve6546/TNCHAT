@@ -228,6 +228,20 @@ export function ChannelsPage() {
     setForm({ ...form, models: nextModels.join('\n'), modelMapping: mappingToText(nextMapping) });
   };
 
+  /**
+   * Renaming a card has to carry its rewrite across: the old name may be the
+   * key of a mapping entry, and leaving it behind would silently drop the
+   * rewrite while the model keeps being advertised.
+   */
+  const renameModel = (from: string, to: string) => {
+    const nextModels = [...new Set(formModels.map((model) => (model === from ? to : model)))];
+    const nextMapping: Record<string, string> = {};
+    for (const [alias, target] of Object.entries(formMapping)) {
+      nextMapping[alias === from ? to : alias] = target;
+    }
+    setForm({ ...form, models: nextModels.join('\n'), modelMapping: mappingToText(nextMapping) });
+  };
+
   const save = useMutation({
     mutationFn: async () => {
       const payload: ChannelPayload = {
@@ -370,7 +384,7 @@ export function ChannelsPage() {
                         <p
                           className={cn(
                             'mt-2 flex flex-wrap items-center gap-x-1.5 text-xs',
-                            ping.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-500',
+                            ping.ok ? 'text-success' : 'text-destructive',
                           )}
                           dir="ltr"
                         >
@@ -460,6 +474,13 @@ export function ChannelsPage() {
             className="flex-1 space-y-5 overflow-y-auto px-6 py-5"
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
+              // The models field has no visible input any more, so "pick at
+              // least one" has to be said here — the server would answer in
+              // English and point at a field the user cannot see.
+              if (formModels.length === 0) {
+                toast.error('فعّل نموذجاً واحداً على الأقل من البطاقات');
+                return;
+              }
               // Caught here as well as in the mutation, so the field that is
               // wrong is the one the user is shown.
               if (mappingError !== null) {
@@ -533,29 +554,18 @@ export function ChannelsPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="channel-models">النماذج</Label>
-              <Textarea
-                id="channel-models"
-                dir="ltr"
-                value={form.models}
-                onChange={(event) => setForm({ ...form, models: event.target.value })}
-                placeholder={'gpt-4o-mini\nclaude-sonnet-4'}
-                required
-              />
-              <p className="text-xs text-muted-foreground">نموذج واحد في كل سطر.</p>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-sm font-medium">ربط النماذج بالبطاقات</p>
-              <p className="text-xs text-muted-foreground">
-                فعّل بطاقة ليُعلن عنها على هذه القناة، واكتب اسمها عند المزوّد إن اختلف — يكتب
-                النظام صيغة التحويل تلقائياً.
-              </p>
+              <div className="space-y-1">
+                <p className="text-sm font-medium">النماذج التي تخدمها هذه القناة</p>
+                <p className="text-xs text-muted-foreground">
+                  فعّل بطاقة ليُعلن عن اسمها للعملاء، واكتب اسمها عند المزوّد إن اختلف. عدّل
+                  البطاقات أو أضف غيرها بحرية — النظام يبرمج التحويل في الخلفية.
+                </p>
+              </div>
               <ModelCards
                 models={formModels}
                 mapping={formMapping}
                 onToggle={applyCard}
-                onRetarget={(alias, upstreamModel) => applyCard(alias, true, upstreamModel)}
+                onRename={renameModel}
               />
             </div>
 
