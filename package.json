@@ -1,0 +1,24 @@
+{
+  "name": "ai-command-center",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Command Center — an LLM gateway (Anthropic ⇄ OpenAI) with a purpose-built control dashboard",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node scripts/acc.mjs start",
+    "dev": "node scripts/acc.mjs dev",
+    "setup": "node scripts/acc.mjs setup",
+    "build": "node scripts/acc.mjs build",
+    "test": "node scripts/acc.mjs test",
+    "check": "node scripts/acc.mjs check",
+    "db": "node scripts/acc.mjs db",
+    "reset": "node scripts/acc.mjs reset"
+  },
+  "comments": {
+    "start": "The one command: installs dependencies, creates .env, migrates the database, builds, and serves everything on a single port."
+  }
+}

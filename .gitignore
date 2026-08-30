@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────
+# Dependencies
+# ─────────────────────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+
+# ─────────────────────────────────────────────────────────────
+# Build output
+# ─────────────────────────────────────────────────────────────
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# ─────────────────────────────────────────────────────────────
+# SECRETS — never commit, in any form
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+**/.master-key
+*.key
+*.pem
+*.p12
+*.pfx
+
+# ─────────────────────────────────────────────────────────────
+# Runtime data — the database holds hashed client keys and
+# encrypted upstream provider keys. It must never be committed.
+# ─────────────────────────────────────────────────────────────
+server/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# ─────────────────────────────────────────────────────────────
+# Logs
+# ─────────────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─────────────────────────────────────────────────────────────
+# Local scratch and external reference material.
+# These stay on disk for analysis but are never part of the product.
+# ─────────────────────────────────────────────────────────────
+.scratch/
+_ref_new_api/
+resp.json
+_tmp_*
+
+# ─────────────────────────────────────────────────────────────
+# Assistant working memory. Kept on disk, never part of the product.
+# ─────────────────────────────────────────────────────────────
+.workbuddy-ai/
+
+# ─────────────────────────────────────────────────────────────
+# Editors / OS
+# ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp

@@ -1,0 +1,16 @@
+packages:
+  - "server"
+  - "web"
+
+# pnpm catalogs — one source of truth for every dependency version used in
+# more than one workspace package. Declare it in a package.json as
+# `"typescript": "catalog:"` so the two workspaces can never drift apart.
+# Requires pnpm >= 9.5.
+catalog:
+  typescript: ^5.9.2
+
+# Native modules that must be built from source instead of downloading a
+# prebuilt binary. better-sqlite3 ships prebuilds for every supported
+# platform, and allowing an unreviewed build script is a supply-chain risk.
+onlyBuiltDependencies:
+  - better-sqlite3
