@@ -1,5 +1,5 @@
 import { RelayFormat } from '../core/formats.js';
-import type { Adaptor, ChannelType } from './types.js';
+import type { Adaptor, AdaptorContext, ChannelType } from './types.js';
 
 /**
  * Adaptors translate "which provider is this" into two concrete things:
@@ -47,6 +47,44 @@ export function normalizeBaseUrl(baseUrl: string): string {
 }
 
 /**
+ * API version prefixes providers commonly sit their endpoint behind.
+ */
+const API_PREFIXES = ['/v1', '/api/v1'] as const;
+
+/**
+ * Alternative base URLs worth trying when the configured one answers 404.
+ *
+ * This covers the mirror image of the mistake `normalizeBaseUrl()` fixes.
+ * There the operator pasted the *endpoint*; here they pasted the bare host —
+ * `https://api.example.com` — because that is what a browser bar and most
+ * provider dashboards show, while the provider actually serves chat under
+ * `/v1`. The adaptor appends its path to the bare host and the provider
+ * answers 404 `{"detail":"Not Found"}`, which reads like a dead channel even
+ * though the key and model are fine.
+ *
+ * Consumed by the channel probe, which retries only on 404: a 401/403 is a
+ * real answer from the right path, so guessing a different path there would
+ * mask a credential problem.
+ *
+ * `custom` returns nothing. That adaptor exists precisely so the operator can
+ * dictate the exact endpoint, and second-guessing it would defeat the point.
+ */
+export function candidateBaseUrls(kind: ChannelType, baseUrl: string): string[] {
+  if (kind === 'custom') return [];
+
+  const root = normalizeBaseUrl(baseUrl);
+  const lower = root.toLowerCase();
+
+  const out: string[] = [];
+  for (const prefix of API_PREFIXES) {
+    // Already carries a version segment; adding another cannot help.
+    if (lower.endsWith(prefix)) return [];
+    out.push(`${root}${prefix}`);
+  }
+  return out;
+}
+
+/**
  * Most providers in practice expose an OpenAI-compatible chat endpoint, so they
  * share one definition. They stay distinct kinds because the operator picks
  * them by name and the label is what shows up in the UI.
@@ -83,11 +121,51 @@ const anthropicAdaptor: Adaptor = {
   }),
 };
 
+/**
+ * The fully-flexible adaptor.
+ *
+ * The URL is used as written — no path is appended, no suffix is peeled —
+ * because an operator who reaches for "Custom" is the one who already knows
+ * the exact endpoint their provider exposes, and second-guessing them is how
+ * a working channel gets broken. Auth style and any extra headers come from
+ * the channel row, so a single `custom` channel can talk to APIs that want
+ * `Authorization: Bearer`, `x-api-key:`, or no auth header at all.
+ *
+ * The upstream speaks OpenAI Chat Completions by default; the format
+ * converters handle Claude->OpenAI translation the same way they do for
+ * `openai`/`generic`/`minimax`.
+ */
+const customAdaptor: Adaptor = {
+  kind: 'custom',
+  label: 'مخصّص (أي API خارجي)',
+  upstreamFormat: RelayFormat.OpenAI,
+  buildUrl: (baseUrl) => {
+    const cleaned = baseUrl.trim().split(/[?#]/, 1)[0] ?? '';
+    // Trailing slashes are stripped (most providers 404 on them); the rest is
+    // left to the operator exactly as they typed it.
+    return cleaned.replace(/\/+$/, '');
+  },
+  buildHeaders: (apiKey, context?: AdaptorContext) => {
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    const style = context?.authStyle ?? 'bearer';
+    if (style === 'bearer' && apiKey !== '') headers['authorization'] = `Bearer ${apiKey}`;
+    else if (style === 'x-api-key' && apiKey !== '') headers['x-api-key'] = apiKey;
+    // The operator's headers go in last so they win — same rule as client
+    // header passthrough, applied to channel config for symmetry.
+    for (const [name, value] of Object.entries(context?.extraHeaders ?? {})) {
+      if (name.trim() === '' || typeof value !== 'string') continue;
+      headers[name.toLowerCase()] = value;
+    }
+    return headers;
+  },
+};
+
 const registry: Record<ChannelType, Adaptor> = {
   openai: openaiCompatible('openai', 'OpenAI'),
   anthropic: anthropicAdaptor,
   minimax: openaiCompatible('minimax', 'MiniMax'),
   generic: openaiCompatible('generic', 'OpenAI-compatible'),
+  custom: customAdaptor,
 };
 
 export function getAdaptor(kind: ChannelType): Adaptor {

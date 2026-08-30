@@ -18,7 +18,7 @@ import { channels, requestLogs } from '../db/schema.js';
 import { GatewayError, toGatewayError } from '../core/errors.js';
 import { RelayFormat, emptyUsage } from '../core/formats.js';
 import type { Usage } from '../core/formats.js';
-import { parseStringList } from '../lib/json.js';
+import { parseStringList, parseStringRecord } from '../lib/json.js';
 import { decryptKeyList } from '../lib/secrets.js';
 import { selectChannel, getPreferredChannel, recordChannelAffinity, clearChannelAffinity } from './distributor.js';
 import { parseModelMapping, resolveModelMapping } from './model-mapping.js';
@@ -69,6 +69,10 @@ interface ChannelRecord {
   weight: number;
   enabled: boolean;
   status: string;
+  /** Only meaningful for `custom`; ignored by every other adaptor. */
+  authStyle: string;
+  /** Only meaningful for `custom`; merged on top of the adaptor's headers. */
+  extraHeaders: Record<string, string>;
 }
 
 /** Round-robin cursor per channel, mirroring MultiKeyPollingIndex. */
@@ -91,6 +95,8 @@ function loadChannel(id: number): ChannelRecord | null {
     weight: row.weight,
     enabled: row.enabled,
     status: row.status,
+    authStyle: row.authStyle,
+    extraHeaders: parseStringRecord(row.extraHeaders),
   };
 }
 
@@ -294,7 +300,10 @@ async function attemptStreamingOrJson(args: AttemptArgs): Promise<RelayOutcome> 
   const apiKey = nextKey(channel);
   const url = adaptor.buildUrl(channel.baseUrl);
   const headers = {
-    ...adaptor.buildHeaders(apiKey),
+    ...adaptor.buildHeaders(apiKey, {
+      authStyle: (channel.authStyle ?? 'bearer') as 'bearer' | 'x-api-key' | 'none',
+      extraHeaders: channel.extraHeaders,
+    }),
     // Client opt-ins win over the adaptor's defaults: a client that asks for
     // a newer `anthropic-version` knows more about what it needs than we do.
     ...clientPassthroughHeaders(request.clientHeaders, adaptor.upstreamFormat),

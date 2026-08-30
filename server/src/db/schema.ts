@@ -40,6 +40,15 @@ export const channels = sqliteTable(
     weight: integer('weight').notNull().default(0),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
 
+    /**
+     * Only the `custom` adaptor reads these. They exist on every row so the
+     * relay pipeline can pass a uniform context to every adaptor without a
+     * `WHERE type = ?` branch — `bearer` / `{}` are the right defaults for the
+     * built-in adaptors, which ignore both fields.
+     */
+    authStyle: text('auth_style').notNull().default('bearer'),
+    extraHeaders: text('extra_headers').notNull().default('{}'),
+
     /** Last live probe result. Drives the model health column in the UI. */
     status: text('status').notNull().default('unknown'),
     lastLatencyMs: integer('last_latency_ms'),

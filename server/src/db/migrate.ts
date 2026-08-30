@@ -94,6 +94,28 @@ const DDL: string[] = [
   )`,
 ];
 
+/**
+ * Columns added after the first release.
+ *
+ * `CREATE TABLE IF NOT EXISTS` cannot change an existing table, so databases
+ * created before a column was introduced need it added explicitly. Re-running
+ * on a database that already has the column is a no-op: SQLite rejects the
+ * duplicate and `tryAlter()` swallows exactly that error and nothing else.
+ */
+const ALTERS: string[] = [
+  `ALTER TABLE "channels" ADD COLUMN "auth_style" text NOT NULL DEFAULT 'bearer'`,
+  `ALTER TABLE "channels" ADD COLUMN "extra_headers" text NOT NULL DEFAULT '{}'`,
+];
+
+function tryAlter(statement: string): void {
+  try {
+    sqliteClient.exec(statement);
+  } catch (error) {
+    if (error instanceof Error && /duplicate column name/i.test(error.message)) return;
+    throw error;
+  }
+}
+
 function isTable(value: unknown): value is SQLiteTable {
   return is(value, SQLiteTable);
 }
@@ -140,6 +162,9 @@ export function migrate(): void {
   try {
     for (const statement of DDL) {
       sqliteClient.exec(statement);
+    }
+    for (const statement of ALTERS) {
+      tryAlter(statement);
     }
     sqliteClient.exec('COMMIT');
   } catch (error) {

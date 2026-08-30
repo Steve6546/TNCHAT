@@ -1,9 +1,14 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { getAdaptor, listAdaptors, normalizeBaseUrl } from '../adapters/index.js';
+import {
+  candidateBaseUrls,
+  getAdaptor,
+  listAdaptors,
+  normalizeBaseUrl,
+} from '../adapters/index.js';
 import { CHANNEL_TYPES } from '../adapters/types.js';
-import type { ChannelType } from '../adapters/types.js';
+import type { AdaptorContext, AuthStyle, ChannelType } from '../adapters/types.js';
 import { config } from '../config.js';
 import { GatewayError } from '../core/errors.js';
 import { db } from '../db/index.js';
@@ -11,7 +16,7 @@ import { channels } from '../db/schema.js';
 import { rebuildRoutingIndex } from '../gateway/ability-index.js';
 import { parseModelMapping, resolveModelMapping } from '../gateway/model-mapping.js';
 import { callUpstream, readUpstreamError } from '../gateway/upstream.js';
-import { parseStringList } from '../lib/json.js';
+import { parseStringList, parseStringRecord } from '../lib/json.js';
 import { decryptKeyList, encryptKeyList } from '../lib/secrets.js';
 import * as v from '../lib/validate.js';
 
@@ -24,6 +29,9 @@ import * as v from '../lib/validate.js';
  */
 
 const MAX_TEST_TOKENS = 16;
+
+/** How the key is presented to a `custom` upstream. Built-ins ignore this. */
+const AUTH_STYLES: readonly AuthStyle[] = ['bearer', 'x-api-key', 'none'];
 
 function maskKey(key: string): string {
   if (key.length <= 12) return '•'.repeat(key.length);
@@ -42,6 +50,8 @@ function serialize(row: typeof channels.$inferSelect) {
     keyCount: keys.length,
     models: parseStringList(row.models),
     modelMapping: parseModelMapping(row.modelMapping),
+    authStyle: row.authStyle as AuthStyle,
+    extraHeaders: parseStringRecord(row.extraHeaders),
     group: row.group,
     priority: row.priority,
     weight: row.weight,
@@ -62,23 +72,55 @@ interface ChannelInput {
   keys: string[];
   models: string[];
   modelMapping: Record<string, string>;
+  authStyle: AuthStyle;
+  extraHeaders: Record<string, string>;
   group: string;
   priority: number;
   weight: number;
   enabled: boolean;
 }
 
-function parseChannelInput(body: unknown, partial: boolean): Partial<ChannelInput> {
+/**
+ * Build the per-call context an adaptor receives, straight from a stored row.
+ *
+ * Shared by the probe and the relay so both send byte-identical headers — a
+ * probe that authenticated differently from real traffic would be worthless.
+ */
+function adaptorContextOf(row: { authStyle: string; extraHeaders: string }): AdaptorContext {
+  const style = row.authStyle;
+  return {
+    authStyle: (AUTH_STYLES as readonly string[]).includes(style) ? (style as AuthStyle) : 'bearer',
+    extraHeaders: parseStringRecord(row.extraHeaders),
+  };
+}
+
+function parseChannelInput(
+  body: unknown,
+  partial: boolean,
+  currentType?: ChannelType,
+): Partial<ChannelInput> {
   const source = (body ?? {}) as Record<string, unknown>;
   const out: Partial<ChannelInput> = {};
 
   if (!partial || source['name'] !== undefined) out.name = v.str(source['name'], 'name', { min: 1, max: 120 });
   if (!partial || source['type'] !== undefined) out.type = v.oneOf(source['type'], 'type', CHANNEL_TYPES);
   if (!partial || source['baseUrl'] !== undefined) {
-    // Normalised on the way in as well as on the way out, so the field shows
-    // the root the gateway will actually call and not the pasted endpoint.
-    out.baseUrl = normalizeBaseUrl(v.requireUrl(source['baseUrl'], 'baseUrl'));
+    const raw = v.requireUrl(source['baseUrl'], 'baseUrl');
+    // `custom` keeps the URL exactly as typed — the operator is telling us the
+    // endpoint, and rewriting it is how working channels get broken.
+    // Every other kind is normalised, on the way in as well as on the way out,
+    // so the field shows the root the gateway will actually call rather than
+    // the endpoint that was pasted.
+    out.baseUrl = (out.type ?? currentType) === 'custom' ? raw : normalizeBaseUrl(raw);
   }
+
+  if (!partial || source['authStyle'] !== undefined) {
+    out.authStyle = v.oneOf(source['authStyle'] ?? 'bearer', 'authStyle', AUTH_STYLES);
+  }
+  if (!partial || source['extraHeaders'] !== undefined) {
+    out.extraHeaders = v.record(source['extraHeaders'], 'extraHeaders');
+  }
+
   if (!partial || source['keys'] !== undefined) out.keys = v.strArray(source['keys'], 'keys', 50);
   if (!partial || source['models'] !== undefined) out.models = v.strArray(source['models'], 'models');
   if (!partial || source['modelMapping'] !== undefined) out.modelMapping = v.record(source['modelMapping'], 'modelMapping');
@@ -127,6 +169,8 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
         keys: encryptKeyList(input.keys),
         models: JSON.stringify(input.models),
         modelMapping: JSON.stringify(input.modelMapping),
+        authStyle: input.authStyle,
+        extraHeaders: JSON.stringify(input.extraHeaders),
         group: input.group,
         priority: input.priority,
         weight: input.weight,
@@ -146,7 +190,7 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
     const existing = db.select().from(channels).where(eq(channels.id, id)).get();
     if (!existing) throw GatewayError.notFound('Channel not found');
 
-    const input = parseChannelInput(request.body, true);
+    const input = parseChannelInput(request.body, true, existing.type as ChannelType);
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
 
     if (input.name !== undefined) patch['name'] = input.name;
@@ -154,6 +198,8 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
     if (input.baseUrl !== undefined) patch['base_url'] = input.baseUrl;
     if (input.models !== undefined) patch['models'] = JSON.stringify(input.models);
     if (input.modelMapping !== undefined) patch['model_mapping'] = JSON.stringify(input.modelMapping);
+    if (input.authStyle !== undefined) patch['auth_style'] = input.authStyle;
+    if (input.extraHeaders !== undefined) patch['extra_headers'] = JSON.stringify(input.extraHeaders);
     if (input.group !== undefined) patch['group'] = input.group;
     if (input.priority !== undefined) patch['priority'] = input.priority;
     if (input.weight !== undefined) patch['weight'] = input.weight;
@@ -185,6 +231,18 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
   /**
    * Live probe. Sends a genuine minimal request to the provider and reports the
    * measured latency. A green tick here means traffic really flowed.
+   *
+   * On a 404 the probe does not give up immediately. It retries the same
+   * request against the version-prefixed variants of the configured root (see
+   * `candidateBaseUrls`, which is empty for `custom`), and when one of them
+   * answers it **persists that root** so every later relay call goes straight
+   * to the working endpoint. This is what turns a bare host such as
+   * `https://api.example.com` into `https://api.example.com/v1` without the
+   * operator having to know the prefix in advance.
+   *
+   * Only 404 triggers a retry. A 401/403 is a real answer from the right path,
+   * so trying another path there would hide a credential problem behind a
+   * confusing series of guesses.
    */
   app.post('/api/channels/:id/test', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
@@ -201,7 +259,9 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
       return reply.send({ ok: false, message: 'No models configured', latencyMs: null });
     }
 
-    const adaptor = getAdaptor(row.type as ChannelType);
+    const kind = row.type as ChannelType;
+    const adaptor = getAdaptor(kind);
+    const context = adaptorContextOf(row);
     const mapped = resolveModelMapping(models[0]!, parseModelMapping(row.modelMapping));
     const targetModel = adaptor.normalizeUpstreamModel
       ? adaptor.normalizeUpstreamModel(mapped.upstreamModel)
@@ -215,42 +275,82 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
       messages: [{ role: 'user', content: 'ping' }],
     };
 
-    const startedAt = Date.now();
-    try {
-      const response = await callUpstream({
-        url: adaptor.buildUrl(row.baseUrl),
-        headers: adaptor.buildHeaders(keys[0]!),
-        body: payload,
-        timeoutMs: Math.min(config.requestTimeoutMs, 60_000),
-      });
-
-      const latencyMs = Date.now() - startedAt;
-
-      if (!response.ok) {
-        const message = await readUpstreamError(response);
-        db.update(channels)
-          .set({ status: 'failing', lastError: message.slice(0, 500), lastLatencyMs: latencyMs, lastTestedAt: Date.now() })
-          .where(eq(channels.id, id))
-          .run();
-        return reply.send({ ok: false, message, latencyMs, statusCode: response.status });
-      }
-
-      // Drain the body so the socket is released.
-      await response.text().catch(() => '');
-
-      db.update(channels)
-        .set({ status: 'healthy', lastError: null, lastLatencyMs: latencyMs, lastTestedAt: Date.now() })
-        .where(eq(channels.id, id))
-        .run();
-
-      return reply.send({ ok: true, message: 'Connected', latencyMs, model: targetModel });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Connection failed';
-      db.update(channels)
-        .set({ status: 'failing', lastError: message.slice(0, 500), lastTestedAt: Date.now() })
-        .where(eq(channels.id, id))
-        .run();
-      return reply.send({ ok: false, message, latencyMs: null });
+    interface Failure {
+      statusCode: number | null;
+      message: string;
+      latencyMs: number | null;
     }
+    let failure: Failure | null = null;
+
+    for (const baseUrl of [row.baseUrl, ...candidateBaseUrls(kind, row.baseUrl)]) {
+      const startedAt = Date.now();
+      try {
+        const response = await callUpstream({
+          url: adaptor.buildUrl(baseUrl),
+          headers: adaptor.buildHeaders(keys[0]!, context),
+          body: payload,
+          timeoutMs: Math.min(config.requestTimeoutMs, 60_000),
+        });
+
+        const latencyMs = Date.now() - startedAt;
+
+        if (response.ok) {
+          // Drain the body so the socket is released.
+          await response.text().catch(() => '');
+
+          if (baseUrl !== row.baseUrl) {
+            // Remember the root that worked. The relay re-reads the row on
+            // every request, so the fix applies immediately with no restart.
+            db.update(channels).set({ baseUrl }).where(eq(channels.id, id)).run();
+          }
+
+          db.update(channels)
+            .set({ status: 'healthy', lastError: null, lastLatencyMs: latencyMs, lastTestedAt: Date.now() })
+            .where(eq(channels.id, id))
+            .run();
+
+          return reply.send({ ok: true, message: 'Connected', latencyMs, model: targetModel, baseUrl });
+        }
+
+        failure = {
+          statusCode: response.status,
+          message: await readUpstreamError(response),
+          latencyMs,
+        };
+        if (response.status !== 404) break;
+      } catch (error) {
+        failure = {
+          statusCode: null,
+          message: error instanceof Error ? error.message : 'Connection failed',
+          latencyMs: null,
+        };
+        break;
+      }
+    }
+
+    const final: Failure = failure ?? { statusCode: null, message: 'Connection failed', latencyMs: null };
+
+    db.update(channels)
+      .set({
+        status: 'failing',
+        lastError: final.message.slice(0, 500),
+        lastLatencyMs: final.latencyMs,
+        lastTestedAt: Date.now(),
+      })
+      .where(eq(channels.id, id))
+      .run();
+
+    return reply.send({
+      ok: false,
+      message: final.message,
+      latencyMs: final.latencyMs,
+      statusCode: final.statusCode,
+      // Shown alongside the upstream's own error so a wrong path reads as "fix
+      // the endpoint" rather than as an inexplicable 404.
+      hint:
+        final.statusCode === 404
+          ? 'Upstream returned 404: the endpoint path is wrong for this provider. Open the channel and set the exact Endpoint URL, or switch its type to Custom.'
+          : undefined,
+    });
   });
 }
