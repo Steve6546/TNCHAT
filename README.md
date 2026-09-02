@@ -66,8 +66,11 @@ node scripts/acc.mjs start
 │       ├── routes/      مسارات HTTP
 │       └── lib/         تشفير، تحقّق، تحديد المعدّل
 ├── web/                 لوحة التحكم: React 19 + Vite 7 + Tailwind 4
-└── docs/                وثائق التصميم والقرارات
+└── docs/ARCHITECTURE.md البنية الكاملة، نظام التصميم، والحدود المعروفة
 ```
+
+للبنية التفصيلية، ونظام التصميم، وخريطة ما نُقل من new-api:
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 **لماذا منفذ واحد:** واجهة الإنتاج تُبنى إلى `web/dist` ويخدمها خادم البوابة
 نفسه عبر `@fastify/static`. لا خادم ثانٍ، ولا بروكسي تطوير، ولا تعارض منافذ.
@@ -178,12 +181,13 @@ print(client.messages.create(
 ## الاختبارات
 
 ```bash
-node scripts/acc.mjs test    # 9 اختبارات: التحويل بين الصيغ والتدفّق
+node scripts/acc.mjs test    # 42 اختباراً: التحويل بين الصيغ، التدفّق، pass-through
 node scripts/acc.mjs check   # + فحص الأنواع
 ```
 
 الاختبارات تغطّي أصعب ما في المشروع: تحويل الطلبات والردود والأحداث المتدفّقة
-بين صيغتي OpenAI و Claude.
+بين صيغتي OpenAI و Claude، ومرور طلبات Claude Code دون تعديل، ونوع القناة
+المخصّص، وحلّ مسار النهاية تلقائياً عند الفحص.
 
 ---
 

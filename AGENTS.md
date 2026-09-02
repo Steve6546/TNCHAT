@@ -5,7 +5,8 @@
 طلب يتوجّه لقناة خاطئة، تدفّق لا يُغلق، مفتاح مُخزَّن نصّاً صريحاً. القواعد
 التالية تمنع تلك الأنواع تحديداً.
 
-اقرأ هذا الملف كاملاً قبل أول تعديل.
+اقرأ هذا الملف كاملاً قبل أول تعديل. البنية والتصميم موثّقان في
+**[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — الحالة الحالية بعد 0.2.0.
 
 ---
 
@@ -50,6 +51,10 @@ grep -rn "اسم_الدالة" server/src web/src
 | سلسلة إعادة توجيه النموذج | `server/src/gateway/model-mapping.ts` |
 | مخطط قاعدة البيانات + الفحص | `server/src/db/migrate.ts` |
 | تحميل `.env` | `server/src/config.ts` |
+| تنظيف عنوان المزوّد (Base URL) | `server/src/adapters/index.ts` — `normalizeBaseUrl()` |
+| ترويسات العميل المُمرَّرة للمزوّد | `server/src/gateway/upstream.ts` — `clientPassthroughHeaders()` |
+| كتالوج بطاقات النماذج | `web/src/stores/model-cards-store.ts` |
+| عنوان الـ endpoint المعروض للنسخ | `web/src/lib/api.ts` — `relayEndpoint()` |
 | كل أوامر التشغيل | `scripts/acc.mjs` |
 
 ### لا تلمس ثوابت الخوارزمية
@@ -159,3 +164,5 @@ finalize(). Skipping it made streamed requests hang on the client.
 | أضيف شاشة | `web/src/features/` + التسجيل في `app.tsx` |
 | أغيّر نصاً معروضاً | الملف نفسه؛ العربية RTL إلزامية |
 | أضيف حزمة | اسأل أولاً: أليست 80 سطراً تكفي؟ |
+| أفهم البنية أو التصميم | `docs/ARCHITECTURE.md` |
+| أطلق إصداراً | حدّث `CHANGELOG.md` و`package.json`، ثم وسم `vX.Y.Z` |
