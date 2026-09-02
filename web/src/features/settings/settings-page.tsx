@@ -1,7 +1,6 @@
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { BookOpen, Moon, Server, ShieldCheck, SlidersHorizontal, Sun } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 
 import { ErrorState } from '../../components/shared/error-state';
 import { PageHeader } from '../../components/shared/page-header';
@@ -13,7 +12,7 @@ import { Label } from '../../components/ui/label';
 import { PasswordField } from '../../components/ui/password-field';
 import { Skeleton } from '../../components/ui/skeleton';
 import { useToast } from '../../components/ui/toast';
-import { endpoints, queryKeys } from '../../lib/api';
+import { endpoints, queryKeys, updateSupabasePassword } from '../../lib/api';
 import { cn, errorMessage, formatDuration } from '../../lib/utils';
 import { useAuthStore } from '../../stores/auth-store';
 import { useThemeStore } from '../../stores/theme-store';
@@ -36,10 +35,10 @@ const TABS: { id: SettingsTab; label: string; icon: typeof SlidersHorizontal }[]
 ];
 
 export function SettingsPage() {
-  const navigate = useNavigate();
   const toast = useToast();
-  const logout = useAuthStore((state) => state.logout);
   const { theme, setTheme } = useThemeStore();
+  const email = useAuthStore((state) => state.email);
+  const supabaseAccessToken = useAuthStore((state) => state.supabaseAccessToken);
 
   const [tab, setTab] = useState<SettingsTab>('general');
   const [currentPassword, setCurrentPassword] = useState('');
@@ -53,16 +52,24 @@ export function SettingsPage() {
     refetchInterval: 30_000,
   });
 
+  /**
+   * Password change verifies the current password by re-authenticating with
+   * Supabase, then updates the account directly. Sessions do not expire, so
+   * the user stays signed in afterwards.
+   */
   const changePassword = useMutation({
-    mutationFn: () => endpoints.changePassword(currentPassword, newPassword),
+    mutationFn: async () => {
+      if (!email || !supabaseAccessToken) {
+        throw new Error('الجلسة لا تحمل بيانات الحساب — سجّل الدخول من جديد');
+      }
+      await endpoints.login(email, currentPassword);
+      await updateSupabasePassword(supabaseAccessToken, newPassword);
+    },
     onSuccess: () => {
-      toast.success('تم تغيير كلمة المرور — سجّل الدخول من جديد');
+      toast.success('تم تحديث كلمة المرور');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      // Every existing session is signed with the old password-derived secret.
-      logout();
-      navigate('/login', { replace: true });
     },
     onError: (error) => toast.error(errorMessage(error)),
   });
@@ -72,6 +79,10 @@ export function SettingsPage() {
     setClientError('');
     if (newPassword.length < 8) {
       setClientError('يجب أن تتكون كلمة المرور الجديدة من 8 أحرف على الأقل');
+      return;
+    }
+    if (!/[A-Za-z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
+      setClientError('يجب أن تحتوي كلمة المرور الجديدة على حرف ورقم على الأقل');
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -118,9 +129,9 @@ export function SettingsPage() {
         <div className="grid gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>كلمة مرور المسؤول</CardTitle>
+            <CardTitle>كلمة مرور الحساب</CardTitle>
             <CardDescription>
-              تغيير كلمة المرور ينهي جميع الجلسات الحالية، بما فيها هذه.
+              الحساب محفوظ في Supabase. يجري التحديث عبر التحقق من كلمة المرور الحالية أولاً، وتبقى جلستك مفتوحة.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -233,6 +244,11 @@ export function SettingsPage() {
                     <Badge tone={health.data.database === 'ok' ? 'success' : 'danger'}>
                       {health.data.database === 'ok' ? 'متصلة' : 'خطأ'}
                     </Badge>
+                  </Row>
+                  <Row label="Supabase">
+                    <span dir="ltr" className="truncate">
+                      {config.supabaseHost || '—'}
+                    </span>
                   </Row>
                   <Row label="أزواج التوجيه">
                     <span dir="ltr">{health.data.routingPairs}</span>

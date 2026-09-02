@@ -38,7 +38,7 @@ function serialize(row: typeof apiKeys.$inferSelect) {
 
 export async function registerKeyRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/keys', async (_request, reply) => {
-    const rows = db.select().from(apiKeys).orderBy(desc(apiKeys.id)).all();
+    const rows = await db.select().from(apiKeys).orderBy(desc(apiKeys.id));
     return reply.send({ data: rows.map(serialize) });
   });
 
@@ -55,7 +55,7 @@ export async function registerKeyRoutes(app: FastifyInstance): Promise<void> {
     const key = generateApiKey();
     const now = Date.now();
 
-    const inserted = db
+    const insertedRows = await db
       .insert(apiKeys)
       .values({
         name,
@@ -67,8 +67,8 @@ export async function registerKeyRoutes(app: FastifyInstance): Promise<void> {
         expiresAt,
         createdAt: now,
       })
-      .returning()
-      .get();
+      .returning();
+    const inserted = insertedRows[0]!;
 
     return reply.code(201).send({
       data: serialize(inserted),
@@ -79,7 +79,8 @@ export async function registerKeyRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch('/api/keys/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
-    const existing = db.select().from(apiKeys).where(eq(apiKeys.id, id)).get();
+    const existingRows = await db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+    const existing = existingRows[0];
     if (!existing) throw GatewayError.notFound('API key not found');
 
     const body = (request.body ?? {}) as Record<string, unknown>;
@@ -94,19 +95,20 @@ export async function registerKeyRoutes(app: FastifyInstance): Promise<void> {
     }
 
     if (Object.keys(patch).length > 0) {
-      db.update(apiKeys).set(patch).where(eq(apiKeys.id, id)).run();
+      await db.update(apiKeys).set(patch).where(eq(apiKeys.id, id));
     }
 
-    const updated = db.select().from(apiKeys).where(eq(apiKeys.id, id)).get();
-    return reply.send({ data: serialize(updated!) });
+    const updatedRows = await db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+    return reply.send({ data: serialize(updatedRows[0]!) });
   });
 
   app.delete('/api/keys/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
-    const existing = db.select().from(apiKeys).where(eq(apiKeys.id, id)).get();
+    const existingRows = await db.select().from(apiKeys).where(eq(apiKeys.id, id)).limit(1);
+    const existing = existingRows[0];
     if (!existing) throw GatewayError.notFound('API key not found');
 
-    db.delete(apiKeys).where(eq(apiKeys.id, id)).run();
+    await db.delete(apiKeys).where(eq(apiKeys.id, id));
     return reply.send({ ok: true });
   });
 }

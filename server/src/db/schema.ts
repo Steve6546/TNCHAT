@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import { bigint, boolean, index, integer, pgTable, serial, text, uniqueIndex } from 'drizzle-orm/pg-core';
 
 /**
  * Schema notes.
@@ -14,15 +14,22 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
  *
  * `requestLogs` is the sole source of every number on the dashboard. There is
  * no aggregate table to drift out of sync with it.
+ *
+ * Timestamps stay in **epoch milliseconds** (the invariant the dashboard and
+ * the old SQLite schema share) so every consumer keeps working unchanged.
+ * They are `bigint` columns because epoch milliseconds exceed Postgres'
+ * 32-bit integer range; Drizzle reads them back as JS numbers.
  */
 
-export const channels = sqliteTable(
+const epochNow = sql`(extract(epoch from now()) * 1000)::bigint`;
+
+export const channels = pgTable(
   'channels',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     name: text('name').notNull(),
 
-    /** Adaptor kind: openai | anthropic | minimax | generic */
+    /** Adaptor kind: openai | anthropic | minimax | generic | custom */
     type: text('type').notNull(),
     baseUrl: text('base_url').notNull(),
 
@@ -35,10 +42,11 @@ export const channels = sqliteTable(
     /** JSON object { "requested": "upstream" }. Supports chained redirects. */
     modelMapping: text('model_mapping').notNull().default('{}'),
 
+    /** `group` is a reserved word in SQL — Drizzle quotes every identifier. */
     group: text('group').notNull().default('default'),
     priority: integer('priority').notNull().default(0),
     weight: integer('weight').notNull().default(0),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    enabled: boolean('enabled').notNull().default(true),
 
     /**
      * Only the `custom` adaptor reads these. They exist on every row so the
@@ -52,25 +60,25 @@ export const channels = sqliteTable(
     /** Last live probe result. Drives the model health column in the UI. */
     status: text('status').notNull().default('unknown'),
     lastLatencyMs: integer('last_latency_ms'),
-    lastTestedAt: integer('last_tested_at'),
+    lastTestedAt: bigint('last_tested_at', { mode: 'number' }),
     lastError: text('last_error'),
 
-    createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
-    updatedAt: integer('updated_at').notNull().default(sql`(unixepoch() * 1000)`),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(epochNow),
+    updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(epochNow),
   },
   (table) => [index('idx_channels_enabled').on(table.enabled)],
 );
 
-export const abilities = sqliteTable(
+export const abilities = pgTable(
   'abilities',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     group: text('group').notNull(),
     model: text('model').notNull(),
     channelId: integer('channel_id')
       .notNull()
       .references(() => channels.id, { onDelete: 'cascade' }),
-    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    enabled: boolean('enabled').notNull().default(true),
     priority: integer('priority').notNull().default(0),
     weight: integer('weight').notNull().default(0),
   },
@@ -80,10 +88,10 @@ export const abilities = sqliteTable(
   ],
 );
 
-export const apiKeys = sqliteTable(
+export const apiKeys = pgTable(
   'api_keys',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
     name: text('name').notNull(),
 
     /** SHA-256 of the full key. Never store the key itself. */
@@ -98,17 +106,17 @@ export const apiKeys = sqliteTable(
     modelLimit: text('model_limit').notNull().default('[]'),
 
     status: text('status').notNull().default('active'),
-    expiresAt: integer('expires_at'),
-    lastUsedAt: integer('last_used_at'),
-    createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
+    expiresAt: bigint('expires_at', { mode: 'number' }),
+    lastUsedAt: bigint('last_used_at', { mode: 'number' }),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(epochNow),
   },
   (table) => [index('idx_api_keys_status').on(table.status)],
 );
 
-export const requestLogs = sqliteTable(
+export const requestLogs = pgTable(
   'request_logs',
   {
-    id: integer('id').primaryKey({ autoIncrement: true }),
+    id: serial('id').primaryKey(),
 
     keyId: integer('key_id'),
     keyName: text('key_name').notNull().default(''),
@@ -127,12 +135,12 @@ export const requestLogs = sqliteTable(
     totalTokens: integer('total_tokens').notNull().default(0),
 
     statusCode: integer('status_code').notNull().default(0),
-    ok: integer('ok', { mode: 'boolean' }).notNull().default(false),
+    ok: boolean('ok').notNull().default(false),
     latencyMs: integer('latency_ms').notNull().default(0),
-    isStream: integer('is_stream', { mode: 'boolean' }).notNull().default(false),
+    isStream: boolean('is_stream').notNull().default(false),
     errorMessage: text('error_message'),
 
-    createdAt: integer('created_at').notNull().default(sql`(unixepoch() * 1000)`),
+    createdAt: bigint('created_at', { mode: 'number' }).notNull().default(epochNow),
   },
   (table) => [
     index('idx_logs_created').on(table.createdAt),
@@ -141,7 +149,7 @@ export const requestLogs = sqliteTable(
   ],
 );
 
-export const settings = sqliteTable('settings', {
+export const settings = pgTable('settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
 });

@@ -45,7 +45,10 @@ grep -rn "اسم_الدالة" server/src web/src
 
 | المسؤولية | المكان الوحيد |
 | --- | --- |
+| اتصال Supabase Postgres (عميل + Drizzle) | `server/src/db/index.ts` |
 | تشفير/فكّ مفاتيح المزوّدين | `server/src/lib/secrets.ts` |
+| إصدار/تحقّق رموز جلسة لوحة التحكم | `server/src/gateway/dashboard-auth.ts` |
+| نداءات Supabase Auth (تسجيل/دخول/استرجاع) | `server/src/auth/supabase.ts` |
 | تحليل JSON إلى قائمة أو خريطة نصية | `server/src/lib/json.ts` |
 | اختيار القناة | `server/src/gateway/distributor.ts` |
 | سلسلة إعادة توجيه النموذج | `server/src/gateway/model-mapping.ts` |
@@ -53,9 +56,25 @@ grep -rn "اسم_الدالة" server/src web/src
 | تحميل `.env` | `server/src/config.ts` |
 | تنظيف عنوان المزوّد (Base URL) | `server/src/adapters/index.ts` — `normalizeBaseUrl()` |
 | ترويسات العميل المُمرَّرة للمزوّد | `server/src/gateway/upstream.ts` — `clientPassthroughHeaders()` |
+| التحقق من صيغة البريد وكلمة المرور (خادم) | `server/src/lib/validate.ts` — `email()` / `password()` |
 | كتالوج بطاقات النماذج | `web/src/stores/model-cards-store.ts` |
 | عنوان الـ endpoint المعروض للنسخ | `web/src/lib/api.ts` — `relayEndpoint()` |
 | كل أوامر التشغيل | `scripts/acc.mjs` |
+
+### لا تُعِد إضافة نظام انتهاء للجلسة
+
+الجلسات **بلا انتهاء** بقرار معماري: رمز موقَّع HMAC يُخزَّن في
+`sessionStorage`، وينتهي بتسجيل الخروج أو بإغلاق التبويب. لا تضِف `exp`، ولا
+عدّاداً تنازلياً، ولا `Countdown` مرتبطاً بالجلسات — كل نظام من هذا القبيل
+حُذف عمداً (المكوّن نفسه لم يعد في المستودع).
+
+### قاعدة البيانات Supabase فقط — وكل الاستعلامات async
+
+- لا `better-sqlite3` ولا واجهاته المتزامنة: لا `.get()` ولا `.run()` ولا
+  `.all()`. طبقة Drizzle هنا فوق `postgres-js`، فكل استعلام `await`.
+- لا تُضِف محرّك قواعد بيانات ثانياً ولا طبقة «وضع محلي» — القرار: أونلاين فقط.
+- الطوابع الزمنية تبقى **بالميلي ثانية** (`bigint` بوضع `mode: 'number'`
+  في `schema.ts`). لا تحوّلها إلى `timestamptz`.
 
 ### لا تلمس ثوابت الخوارزمية
 
@@ -80,6 +99,9 @@ grep -rn "اسم_الدالة" server/src web/src
 - لا تكتب مفاتيح المزوّدين في السجلات أو رسائل الخطأ أو ردود الـ API.
 - لا تُظهر محتوى `MASTER_KEY` أو `SESSION_SECRET` أبداً. نقطة `/health` تعرض
   **مصدر** كل واحد منهما (`environment` / `generated-file` / `derived`)، لا قيمته.
+- مفاتيح Supabase: `SUPABASE_ANON_KEY` عام بالتصميم ويُقدَّم للمتصفح عبر
+  `/api/auth/config`؛ أما `DATABASE_URL` فيحتاج كلمة مرور فلا يغادر الخادم
+  أبداً. لا يُخزَّن مفتاح `service_role` في أي مكان في هذا المشروع.
 - مفتاح العميل النصّي الصريح يظهر مرة واحدة فقط في استجابة الإنشاء، ولا يُعاد.
 
 ### لا تُدخل تبعية دون حاجة
@@ -105,8 +127,8 @@ grep -rn "اسم_الدالة" server/src web/src
   النماذج، الروابط، الأرقام) تبقى LTR داخل عنصر `dir="ltr"`.
 - **الأرقام تستخدم نظام `latn`.** دوال التنسيق في `web/src/lib/utils.ts` تثبّت
   ذلك — استخدمها ولا تكتب `Intl` يدوياً.
-- **كل الطوابع الزمنية بالميلي ثانية.** مخطط قاعدة البيانات يستخدم
-  `unixepoch() * 1000`. احترم ذلك في الاتجاهين.
+- **كل الطوابع الزمنية بالميلي ثانية.** مخطط قاعدة البيانات يستخدم أعمدة
+  `bigint` بقيم `unixepoch * 1000`. احترم ذلك في الاتجاهين.
 - **الواجهات الثقيلة تُحمَّل مؤجَّلة.** الرسم البياني في `requests-chart.tsx`
   مفصول بـ `lazy()` لأن Recharts يمثّل ~40% من حجم الحزمة. لا تستورده مباشرة.
 

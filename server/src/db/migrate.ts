@@ -1,8 +1,8 @@
 import { getTableColumns, getTableName, is } from 'drizzle-orm';
-import { SQLiteTable } from 'drizzle-orm/sqlite-core';
+import { PgTable } from 'drizzle-orm/pg-core';
 import { pathToFileURL } from 'node:url';
 import { config } from '../config.js';
-import { db, sqliteClient } from './index.js';
+import { db, pg } from './index.js';
 import * as schema from './schema.js';
 
 /**
@@ -10,14 +10,35 @@ import * as schema from './schema.js';
  *
  * The schema is small, stable and owned entirely by this project, and a
  * hand-audited DDL plus a boot-time drift check is stronger than a generated
- * file nobody reads. `verifySchema()` below compares the live database against
+ * file nobody reads. `verifySchema()` compares the live database against
  * `schema.ts`, so a mismatch between the two fails loudly at startup instead
- * of surfacing as a runtime "no such column" hours later.
+ * of surfacing as a runtime "column does not exist" hours later.
+ *
+ * Every statement is idempotent, so running `migrate()` on boot against the
+ * same Supabase project is always safe.
  */
 
-const DDL: string[] = [
-  `CREATE TABLE IF NOT EXISTS "channels" (
-    "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+/**
+ * Schema objects, in dependency order.
+ *
+ * Existence is checked with `to_regclass()` before each statement runs rather
+ * than relying on `IF NOT EXISTS`: creating (or skipping) an index still
+ * parses the target table, and Postgres demands ownership of a table owned by
+ * another role even when the statement would be a no-op. A dedicated app role
+ * therefore migrates a database initialised by the Supabase dashboard without
+ * needing to own the tables.
+ */
+interface SchemaObject {
+  /** Relation name in the `public` schema (table or index). */
+  name: string;
+  ddl: string;
+}
+
+const DDL: SchemaObject[] = [
+  {
+    name: 'channels',
+    ddl: `CREATE TABLE IF NOT EXISTS "channels" (
+    "id" serial PRIMARY KEY,
     "name" text NOT NULL,
     "type" text NOT NULL,
     "base_url" text NOT NULL,
@@ -27,44 +48,64 @@ const DDL: string[] = [
     "group" text DEFAULT 'default' NOT NULL,
     "priority" integer DEFAULT 0 NOT NULL,
     "weight" integer DEFAULT 0 NOT NULL,
-    "enabled" integer DEFAULT 1 NOT NULL,
+    "enabled" boolean DEFAULT true NOT NULL,
+    "auth_style" text DEFAULT 'bearer' NOT NULL,
+    "extra_headers" text DEFAULT '{}' NOT NULL,
     "status" text DEFAULT 'unknown' NOT NULL,
     "last_latency_ms" integer,
-    "last_tested_at" integer,
+    "last_tested_at" bigint,
     "last_error" text,
-    "created_at" integer DEFAULT (unixepoch() * 1000) NOT NULL,
-    "updated_at" integer DEFAULT (unixepoch() * 1000) NOT NULL
+    "created_at" bigint DEFAULT (extract(epoch from now()) * 1000)::bigint NOT NULL,
+    "updated_at" bigint DEFAULT (extract(epoch from now()) * 1000)::bigint NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS "idx_channels_enabled" ON "channels" ("enabled")`,
-
-  `CREATE TABLE IF NOT EXISTS "abilities" (
-    "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  },
+  {
+    name: 'idx_channels_enabled',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_channels_enabled" ON "channels" ("enabled")`,
+  },
+  {
+    name: 'abilities',
+    ddl: `CREATE TABLE IF NOT EXISTS "abilities" (
+    "id" serial PRIMARY KEY,
     "group" text NOT NULL,
     "model" text NOT NULL,
     "channel_id" integer NOT NULL REFERENCES "channels"("id") ON DELETE CASCADE,
-    "enabled" integer DEFAULT 1 NOT NULL,
+    "enabled" boolean DEFAULT true NOT NULL,
     "priority" integer DEFAULT 0 NOT NULL,
     "weight" integer DEFAULT 0 NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS "idx_abilities_lookup" ON "abilities" ("group", "model")`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS "idx_abilities_unique" ON "abilities" ("group", "model", "channel_id")`,
-
-  `CREATE TABLE IF NOT EXISTS "api_keys" (
-    "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  },
+  {
+    name: 'idx_abilities_lookup',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_abilities_lookup" ON "abilities" ("group", "model")`,
+  },
+  {
+    name: 'idx_abilities_unique',
+    ddl: `CREATE UNIQUE INDEX IF NOT EXISTS "idx_abilities_unique" ON "abilities" ("group", "model", "channel_id")`,
+  },
+  {
+    name: 'api_keys',
+    ddl: `CREATE TABLE IF NOT EXISTS "api_keys" (
+    "id" serial PRIMARY KEY,
     "name" text NOT NULL,
     "key_hash" text NOT NULL UNIQUE,
     "key_preview" text NOT NULL,
     "group" text DEFAULT 'default' NOT NULL,
     "model_limit" text DEFAULT '[]' NOT NULL,
     "status" text DEFAULT 'active' NOT NULL,
-    "expires_at" integer,
-    "last_used_at" integer,
-    "created_at" integer DEFAULT (unixepoch() * 1000) NOT NULL
+    "expires_at" bigint,
+    "last_used_at" bigint,
+    "created_at" bigint DEFAULT (extract(epoch from now()) * 1000)::bigint NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS "idx_api_keys_status" ON "api_keys" ("status")`,
-
-  `CREATE TABLE IF NOT EXISTS "request_logs" (
-    "id" integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+  },
+  {
+    name: 'idx_api_keys_status',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_api_keys_status" ON "api_keys" ("status")`,
+  },
+  {
+    name: 'request_logs',
+    ddl: `CREATE TABLE IF NOT EXISTS "request_logs" (
+    "id" serial PRIMARY KEY,
     "key_id" integer,
     "key_name" text DEFAULT '' NOT NULL,
     "channel_id" integer,
@@ -78,46 +119,46 @@ const DDL: string[] = [
     "cached_tokens" integer DEFAULT 0 NOT NULL,
     "total_tokens" integer DEFAULT 0 NOT NULL,
     "status_code" integer DEFAULT 0 NOT NULL,
-    "ok" integer DEFAULT 0 NOT NULL,
+    "ok" boolean DEFAULT false NOT NULL,
     "latency_ms" integer DEFAULT 0 NOT NULL,
-    "is_stream" integer DEFAULT 0 NOT NULL,
+    "is_stream" boolean DEFAULT false NOT NULL,
     "error_message" text,
-    "created_at" integer DEFAULT (unixepoch() * 1000) NOT NULL
+    "created_at" bigint DEFAULT (extract(epoch from now()) * 1000)::bigint NOT NULL
   )`,
-  `CREATE INDEX IF NOT EXISTS "idx_logs_created" ON "request_logs" ("created_at")`,
-  `CREATE INDEX IF NOT EXISTS "idx_logs_model" ON "request_logs" ("model")`,
-  `CREATE INDEX IF NOT EXISTS "idx_logs_channel" ON "request_logs" ("channel_id")`,
-
-  `CREATE TABLE IF NOT EXISTS "settings" (
+  },
+  {
+    name: 'idx_logs_created',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_logs_created" ON "request_logs" ("created_at")`,
+  },
+  {
+    name: 'idx_logs_model',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_logs_model" ON "request_logs" ("model")`,
+  },
+  {
+    name: 'idx_logs_channel',
+    ddl: `CREATE INDEX IF NOT EXISTS "idx_logs_channel" ON "request_logs" ("channel_id")`,
+  },
+  {
+    name: 'settings',
+    ddl: `CREATE TABLE IF NOT EXISTS "settings" (
     "key" text PRIMARY KEY NOT NULL,
     "value" text NOT NULL
   )`,
+  },
 ];
 
 /**
- * Columns added after the first release.
+ * Columns added after the first release live here.
  *
  * `CREATE TABLE IF NOT EXISTS` cannot change an existing table, so databases
- * created before a column was introduced need it added explicitly. Re-running
- * on a database that already has the column is a no-op: SQLite rejects the
- * duplicate and `tryAlter()` swallows exactly that error and nothing else.
+ * created before a column was introduced need it added explicitly. Each ALTER
+ * is wrapped in a DO block that swallows exactly the "duplicate column" error
+ * and nothing else, making re-runs a no-op.
  */
-const ALTERS: string[] = [
-  `ALTER TABLE "channels" ADD COLUMN "auth_style" text NOT NULL DEFAULT 'bearer'`,
-  `ALTER TABLE "channels" ADD COLUMN "extra_headers" text NOT NULL DEFAULT '{}'`,
-];
+const ALTERS: string[] = [];
 
-function tryAlter(statement: string): void {
-  try {
-    sqliteClient.exec(statement);
-  } catch (error) {
-    if (error instanceof Error && /duplicate column name/i.test(error.message)) return;
-    throw error;
-  }
-}
-
-function isTable(value: unknown): value is SQLiteTable {
-  return is(value, SQLiteTable);
+function isTable(value: unknown): value is PgTable {
+  return is(value, PgTable);
 }
 
 /**
@@ -125,7 +166,7 @@ function isTable(value: unknown): value is SQLiteTable {
  * Catches the exact failure mode this design is exposed to: DDL and the Drizzle
  * schema drifting apart.
  */
-export function verifySchema(): void {
+export async function verifySchema(): Promise<void> {
   const problems: string[] = [];
 
   for (const [exportName, value] of Object.entries(schema)) {
@@ -133,16 +174,17 @@ export function verifySchema(): void {
 
     const tableName = getTableName(value);
     const declared = Object.values(getTableColumns(value)).map((column) => column.name);
-    const rows = sqliteClient.prepare(`PRAGMA table_info("${tableName}")`).all() as {
-      name: string;
-    }[];
+    const rows = (await pg`
+      SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = ${tableName}
+    `) as Array<{ column_name: string }>;
 
     if (rows.length === 0) {
       problems.push(`table "${tableName}" (from export "${exportName}") is missing`);
       continue;
     }
 
-    const actual = new Set(rows.map((row) => row.name));
+    const actual = new Set(rows.map((row) => row.column_name));
     const missing = declared.filter((column) => !actual.has(column));
     if (missing.length > 0) {
       problems.push(`table "${tableName}" is missing columns: ${missing.join(', ')}`);
@@ -152,26 +194,24 @@ export function verifySchema(): void {
   if (problems.length > 0) {
     throw new Error(
       `Database schema does not match src/db/schema.ts:\n  - ${problems.join('\n  - ')}\n` +
-        'Run `node scripts/acc.mjs reset` to recreate it, or add a migration.',
+        'Run `node scripts/acc.mjs db` to apply the schema, or add a migration.',
     );
   }
 }
 
-export function migrate(): void {
-  sqliteClient.exec('BEGIN');
-  try {
-    for (const statement of DDL) {
-      sqliteClient.exec(statement);
-    }
-    for (const statement of ALTERS) {
-      tryAlter(statement);
-    }
-    sqliteClient.exec('COMMIT');
-  } catch (error) {
-    sqliteClient.exec('ROLLBACK');
-    throw error;
+export async function migrate(): Promise<void> {
+  for (const object of DDL) {
+    const rows = (await pg`
+      SELECT to_regclass('public.' || ${object.name}) AS reg
+    `) as Array<{ reg: string | null }>;
+    if (rows[0]?.reg !== null && rows[0]?.reg !== undefined) continue;
+
+    await pg.unsafe(object.ddl);
   }
-  verifySchema();
+  for (const statement of ALTERS) {
+    await pg.unsafe(statement);
+  }
+  await verifySchema();
 }
 
 export { db };
@@ -184,6 +224,14 @@ export { db };
  * `C:\repo\server\src\db\migrate.ts` is not a valid `file://` URL as written.
  */
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  migrate();
-  console.log(`[db] schema up to date at ${config.dbPath}`);
+  migrate()
+    .then(() => {
+      console.log('[db] schema up to date on the Supabase database');
+      return pg.end();
+    })
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error('[db] migration failed:', error instanceof Error ? error.message : error);
+      process.exit(1);
+    });
 }

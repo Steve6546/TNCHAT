@@ -14,7 +14,14 @@ import { registerRelayRoutes } from './routes/relay.js';
 import { registerSpaRoutes } from './routes/spa.js';
 
 /** Management endpoints that must stay reachable without a dashboard session. */
-const PUBLIC_API_PATHS = new Set(['/api/auth/status', '/api/auth/login', '/api/auth/setup']);
+const PUBLIC_API_PATHS = new Set([
+  '/api/auth/status',
+  '/api/auth/config',
+  '/api/auth/login',
+  '/api/auth/signup',
+  '/api/auth/recover',
+  '/api/auth/logout',
+]);
 
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -109,7 +116,7 @@ export async function buildApp(): Promise<FastifyInstance> {
     if (!verifyToken(extractDashboardToken(request.headers.authorization))) {
       return reply.code(401).send({
         error: {
-          message: 'Dashboard session missing or expired',
+          message: 'الجلسة غير صالحة — سجّل الدخول من جديد',
           type: 'authentication_error',
           code: 'invalid_api_key',
         },

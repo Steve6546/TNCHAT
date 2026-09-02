@@ -208,20 +208,37 @@ function ensureEnv() {
   const envPath = path.join(REPO_ROOT, '.env');
   const examplePath = path.join(REPO_ROOT, '.env.example');
 
-  if (existsSync(envPath)) return;
-
-  if (!existsSync(examplePath)) {
-    fail('Neither .env nor .env.example exists. Restore .env.example from the repository.');
+  if (!existsSync(envPath)) {
+    if (!existsSync(examplePath)) {
+      fail('Neither .env nor .env.example exists. Restore .env.example from the repository.');
+    }
+    copyFileSync(examplePath, envPath);
+    ok('created .env from .env.example');
   }
 
-  copyFileSync(examplePath, envPath);
-  ok('created .env from .env.example');
-  warn('ADMIN_PASSWORD is empty by design — the dashboard will ask you to create one.');
+  // Supabase is the only database backend: refuse to continue with a clear,
+  // actionable message instead of a connection error deep inside the server.
+  const env = readEnvFile();
+  const missing = ['DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_ANON_KEY'].filter(
+    (key) => !(process.env[key] ?? env[key] ?? '').trim(),
+  );
+  if (missing.length > 0) {
+    fail(
+      `Missing required Supabase settings in .env: ${missing.join(', ')}\n` +
+        `  1. Create (or unpause) a project at https://supabase.com/dashboard\n` +
+        `  2. Copy Project Settings → API values into .env:\n` +
+        `       DATABASE_URL=postgresql://<user>:<password>@<host>:5432/postgres\n` +
+        `       SUPABASE_URL=https://<project-ref>.supabase.co\n` +
+        `       SUPABASE_ANON_KEY=<anon key>\n` +
+        `  3. Run this command again — the schema is applied automatically.`,
+    );
+  }
+  ok('Supabase settings present');
 }
 
 /**
- * Full database preparation: schema, routing index, and the one-time promotion
- * of ADMIN_PASSWORD into the database when an operator has set one.
+ * Full database preparation: apply the schema to Supabase and warm the
+ * routing index.
  *
  * `src/db/migrate.ts` remains the schema-only primitive (that is what
  * `acc.mjs db` runs); this is the entry point for everything that boots.
@@ -449,7 +466,7 @@ async function commandReset() {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = (await rl.question(`Delete ${dataDir}? This erases all channels, keys and logs. [y/N] `))
+  const answer = (await rl.question(`Delete ${dataDir}? This erases the generated master key, making stored provider keys unreadable. [y/N] `))
     .trim()
     .toLowerCase();
   rl.close();
@@ -461,7 +478,7 @@ async function commandReset() {
 
   rmSync(dataDir, { recursive: true, force: true });
   mkdirSync(dataDir, { recursive: true });
-  ok('local database deleted');
+  ok('local key material deleted — live data lives in Supabase and is untouched');
 }
 
 /* ────────────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
 import { useAuthStore } from '../stores/auth-store';
 import type {
   ApiKeyItem,
+  AuthSession,
   Channel,
   ChannelPayload,
   ChannelTestResult,
   ChannelTypeOption,
   HealthInfo,
-  SessionPayload,
+  SignupResponse,
   StatsOverview,
 } from './types';
 
@@ -63,28 +64,70 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-/* ── Typed endpoints ─────────────────────────────────────────── */
-
 const json = (body: unknown) => JSON.stringify(body);
+
+interface SupabaseConfig {
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+}
+
+/** Public Supabase project coordinates, served by the gateway (no secrets). */
+let supabaseConfigCache: SupabaseConfig | null = null;
+
+export async function supabaseConfig(): Promise<SupabaseConfig> {
+  if (supabaseConfigCache) return supabaseConfigCache;
+  const body = await api<{ data: SupabaseConfig }>('/api/auth/config');
+  supabaseConfigCache = body.data;
+  return supabaseConfigCache;
+}
+
+/**
+ * Change the Supabase account password.
+ *
+ * Goes straight to Supabase Auth with the access token issued at login: the
+ * gateway never stores account credentials, so it cannot proxy this call.
+ */
+export async function updateSupabasePassword(accessToken: string, newPassword: string): Promise<void> {
+  const { supabaseUrl, supabaseAnonKey } = await supabaseConfig();
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    method: 'PUT',
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: json({ password: newPassword }),
+  });
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => ({}));
+    throw new ApiError(errorTextOf(body) ?? `فشل تحديث كلمة المرور (${response.status})`, response.status);
+  }
+}
 
 export const endpoints = {
   health: () => api<HealthInfo>('/health'),
 
-  authStatus: () => api<{ data: { configured: boolean; serverTime: string } }>('/api/auth/status'),
-  login: (password: string) =>
-    api<{ data: SessionPayload }>('/api/auth/login', {
+  authStatus: () => api<{ data: { provider: string } }>('/api/auth/status'),
+  login: (email: string, password: string) =>
+    api<{ data: AuthSession }>('/api/auth/login', {
       method: 'POST',
-      body: json({ password }),
+      body: json({ email, password }),
     }),
-  setup: (password: string) =>
-    api<{ data: SessionPayload }>('/api/auth/setup', {
+  signup: (email: string, password: string) =>
+    api<{ data: SignupResponse }>('/api/auth/signup', {
       method: 'POST',
-      body: json({ password }),
+      body: json({ email, password }),
     }),
-  changePassword: (currentPassword: string, newPassword: string) =>
-    api<{ ok: boolean }>('/api/auth/password', {
+  recover: (email: string) =>
+    api<{ data: { message: string } }>('/api/auth/recover', {
       method: 'POST',
-      body: json({ currentPassword, newPassword }),
+      body: json({ email }),
+    }),
+  authConfig: () => api<{ data: SupabaseConfig }>('/api/auth/config'),
+  logout: (supabaseAccessToken: string | null) =>
+    api<{ ok: boolean }>('/api/auth/logout', {
+      method: 'POST',
+      body: json({ supabaseAccessToken }),
     }),
 
   channels: () => api<{ data: Channel[] }>('/api/channels'),

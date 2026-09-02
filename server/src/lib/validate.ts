@@ -82,3 +82,24 @@ export function oneOf<T extends string>(value: unknown, field: string, allowed: 
   }
   return value as T;
 }
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/** Strict-enough email shape: something@domain.tld, no spaces, bounded length. */
+export function email(value: unknown, field: string): string {
+  const raw = str(value, field, { min: 5, max: 320 });
+  if (!EMAIL_PATTERN.test(raw)) fail(field, 'a valid email address');
+  return raw.toLowerCase();
+}
+
+/**
+ * Password policy, enforced in one place and mirrored by the dashboard form:
+ * at least 8 characters with at least one letter and one digit.
+ */
+export function password(value: unknown, field: string): string {
+  const raw = str(value, field, { min: 8, max: 200 });
+  if (!/[A-Za-z]/.test(raw) || !/[0-9]/.test(raw)) {
+    fail(field, 'at least 8 characters including a letter and a digit');
+  }
+  return raw;
+}

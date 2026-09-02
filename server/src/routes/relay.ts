@@ -68,7 +68,7 @@ async function handleRelay(
       request.headers as Record<string, unknown>,
       (request.query ?? {}) as Record<string, unknown>,
     );
-    const auth = authenticate(rawKey);
+    const auth = await authenticate(rawKey);
 
     const model = requireModel(body);
     assertModelAllowed(auth, model);
@@ -119,7 +119,7 @@ export async function registerRelayRoutes(app: FastifyInstance): Promise<void> {
         request.headers as Record<string, unknown>,
         (request.query ?? {}) as Record<string, unknown>,
       );
-      const auth = authenticate(rawKey);
+      const auth = await authenticate(rawKey);
 
       const models = abilityIndex.modelsForGroup(auth.group);
       const allowed =

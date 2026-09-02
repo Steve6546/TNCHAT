@@ -2,9 +2,10 @@
 
 > بوابة توجيه للنماذج اللغوية مع لوحة تحكم عربية. منطق البوابة منقول بأمانة من
 > [QuantumNous/new-api](https://github.com/QuantumNous/new-api)، والواجهة
-> والإدارة مكتوبتان من الصفر.
+> والإدارة مكتوبتان من الصفر. منذ 0.3.0: قاعدة البيانات والحسابات عبر
+> **Supabase** (Postgres + Auth)، والجلسات بلا انتهاء.
 >
-> هذا المستند يصف **الحالة الحالية** بعد تنفيذ الإصدار 0.2.0 — لا خطة عمل.
+> هذا المستند يصف **الحالة الحالية** بعد تنفيذ الإصدار 0.3.0 — لا خطة عمل.
 > للتشغيل والأوامر: [README.md](../README.md). للقواعد الملزمة:
 > [AGENTS.md](../AGENTS.md).
 
@@ -37,12 +38,14 @@
 | البند | القرار | السبب |
 | --- | --- | --- |
 | الباك إند | **Node 22 + TypeScript + Fastify 5** | لغة واحدة للمشروع كله، وSSE streaming ممتاز. أسماء المفاهيم مطابقة للأصل لتسهيل أي مقارنة لاحقة |
-| قاعدة البيانات | **SQLite** عبر `better-sqlite3` + **Drizzle ORM** | ملف واحد `server/data/app.db`، صفر إعداد |
+| قاعدة البيانات | **Supabase Postgres** عبر `postgres-js` + **Drizzle ORM** | المشروع أونلاين فقط بقرار صريح: لا وضع محلي ولا محرّك ثانٍ. `prepare: false` لتوافق PgBouncer |
+| حسابات لوحة التحكم | **Supabase Auth** (بريد + كلمة مرور + استرجاع بالبريد) | لا كلمة مرور إدارة واحدة تُخزَّن محلياً؛ الاسترجاع يتم برسالة Supabase المدمجة |
+| الجلسات | **رمز HMAC موقَّع بلا انتهاء** في `sessionStorage` | تنتهي بتسجيل الخروج أو بإغلاق التبويب — لا عدّادات ولا `exp`، حُذف نظام المدة كلياً |
 | الواجهة | **Vite 7 + React 19 + TypeScript + Tailwind 4** | `@tailwindcss/vite` |
 | المكوّنات | **shadcn/ui** (Radix)، ومنسوخة إلى `web/src/components/ui/` | أساس صلب بلا تبعية وقت تشغيل |
 | إدارة الحالة | **Zustand** (stores منفصلة) + **TanStack Query** لبيانات السيرفر | Zustand لحالة الواجهة، Query للبيانات القادمة من السيرفر |
 | البروتوكولات | **Anthropic + OpenAI** بالاتجاهين + streaming + Claude Code pass-through | يكفي Claude Desktop وClaude Code وأي عميل OpenAI |
-| البيانات | **صفر بيانات وهمية.** الـ seed الوحيد هو حساب الإدارة الأول | كل بطاقة معروضة تأتي من `GET` حقيقي |
+| البيانات | **صفر بيانات وهمية.** الـ seed الوحيد هو مخطط الجداول | كل بطاقة معروضة تأتي من `GET` حقيقي |
 | التشغيل | **منفذ واحد.** الواجهة تُبنى إلى `web/dist` ويخدمها خادم البوابة نفسه | لا خادم ثانٍ، ولا بروكسي تطوير، ولا تعارض منافذ |
 
 ---
@@ -52,12 +55,13 @@
 ```
 TNCHAT/
 ├── scripts/acc.mjs            المشغّل الموحّد — كل الأوامر تمرّ من هنا
-├── server/                    بوابة Fastify 5 + SQLite/Drizzle
+├── server/                    بوابة Fastify 5 + Supabase Postgres/Drizzle
 │   └── src/
 │       ├── index.ts           نقطة الدخول
 │       ├── app.ts             مصنع Fastify (قابل للاختبار عبر app.inject)
 │       ├── config.ts          تحميل .env + التحقق  ← المصدر الوحيد للإعداد
 │       ├── adapters/          types.ts + index.ts  (openaiCompatible(kind, label))
+│       ├── auth/              supabase.ts — عميل Supabase Auth (تسجيل/دخول/استرجاع)
 │       ├── convert/           dto/ · claude-to-openai.ts · openai-to-claude.ts
 │       ├── core/              errors.ts (GatewayError) · formats.ts
 │       ├── db/                schema.ts · migrate.ts · bootstrap.ts · index.ts
@@ -72,10 +76,10 @@ TNCHAT/
 │       ├── components/
 │       │   ├── ui/            مكوّنات shadcn المنسوخة + password-field + toast
 │       │   ├── shared/        page-header · empty-state · error-state
-│       │   │                  copy-button · countdown · spinner · logo
+│       │   │                  copy-button · spinner · logo
 │       │   └── layout/        app-shell (الشريط الجانبي)
 │       ├── features/
-│       │   ├── auth/          login-page
+│       │   ├── auth/          login-page — دخول · إنشاء حساب · استرجاع كلمة المرور
 │       │   ├── channels/      channels-page · model-cards   (/models)
 │       │   ├── keys/          keys-page                     (/keys)
 │       │   ├── overview/      overview-page · requests-chart
@@ -129,10 +133,12 @@ MiniMax · Anthropic · OpenAI · أي API متوافق مع OpenAI · مخصّ�
 
 **قاعدتان ثابتتان:**
 
-- **الطوابع الزمنية بالميلي ثانية** — المخطط يستخدم `unixepoch() * 1000`.
-- **الترقية موضعية** — `migrate.ts` يحمل مصفوفة `ALTERS` مع `tryAlter()` يبتلع
-  خطأ «العمود موجود» وحده، فتترقّى قاعدة قديمة في مكانها بدل أن تفشل عند
-  الإقلاع.
+- **الطوابع الزمنية بالميلي ثانية** — أعمدة `bigint` تُملأ بقيمة
+  `extract(epoch from now()) * 1000`.
+- **الترقية موضعية** — `migrate.ts` يحمل مصفوفة `DDL`/`ALTERS` عديمة الأثر
+  (`IF NOT EXISTS` وكتل `DO … duplicate column`)، فتترقّى قاعدة قديمة في مكانها
+  بدل أن تفشل عند الإقلاع، و`verifySchema()` يقارن المخطط الحيّ بـ `schema.ts`
+  عبر `information_schema` عند كل إقلاع.
 
 ---
 
@@ -193,6 +199,8 @@ h1 24/500 · h2 18/500 · h3 15/500 · body 14/400 · caption 12/400
 
 | الحدّ | الأثر | الحالة |
 | --- | --- | --- |
+| المشروع أونلاين فقط | لا يعمل بلا إنترنت ولا بلا مشروع Supabase نشط | **قرار واعٍ** — لا وضع محلي ولا محرّك ثانٍ |
+| الجلسات بلا انتهاء | رمز مسرّب يبقى صالحاً حتى يغيَّر `SESSION_SECRET` | **قرار واعٍ** — الرمز في `sessionStorage` فقط ولا يخرج من التبويب |
 | تحويل Claude ⇄ OpenAI مُصنَّف `Fair` | بعض الخصائص قد لا تحفظ دلالتها بالكامل | مُخفَّف بـ pass-through: طلبات Claude Code تمرّ كما أُرسلت |
 | التحويل عبر Gemini مُصنَّف `Discouraged` | غير مدعوم | **قرار واعٍ** — لا يُنفَّذ بدل ادّعاء الكمال |
 | `FinalizeStreamResponse` في نهاية التدفّق | usage ناقص أو تدفّق لا يُغلق | `finally` إجباري في كل مسار تدفّق + اختبار |
@@ -211,10 +219,10 @@ h1 24/500 · h2 18/500 · h3 15/500 · body 14/400 · caption 12/400
 node scripts/acc.mjs start   # الأمر الوحيد الذي تحتاجه: تثبيت ← بناء ← تشغيل
 node scripts/acc.mjs dev     # تشغيل مع إعادة تحميل تلقائي
 node scripts/acc.mjs check   # فحص الأنواع + الاختبارات — ما تشغّله CI
-node scripts/acc.mjs test    # 42 اختباراً
+node scripts/acc.mjs test    # مجموعة الاختبارات
 node scripts/acc.mjs build   # فحص الأنواع ثم بناء الخادم والواجهة
-node scripts/acc.mjs db      # تطبيق مخطط قاعدة البيانات
-node scripts/acc.mjs reset   # حذف قاعدة البيانات المحلية (يسأل أولاً)
+node scripts/acc.mjs db      # تطبيق مخطط قاعدة البيانات على Supabase
+node scripts/acc.mjs reset   # حذف مفتاح التشفير المولَّد محلياً (يسأل أولاً)
 ```
 
 **لا تستخدم** `pnpm -r typecheck` أو `pnpm -r lint` — لا وجود لهما. الفحص

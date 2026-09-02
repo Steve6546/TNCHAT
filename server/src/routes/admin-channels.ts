@@ -134,7 +134,7 @@ function parseChannelInput(
 
 export async function registerChannelRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/channels', async (_request, reply) => {
-    const rows = db.select().from(channels).orderBy(channels.id).all();
+    const rows = await db.select().from(channels).orderBy(channels.id);
     return reply.send({ data: rows.map(serialize) });
   });
 
@@ -160,7 +160,7 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
 
     const now = Date.now();
 
-    const inserted = db
+    const insertedRows = await db
       .insert(channels)
       .values({
         name: input.name,
@@ -178,16 +178,17 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
         createdAt: now,
         updatedAt: now,
       })
-      .returning()
-      .get();
+      .returning();
+    const inserted = insertedRows[0]!;
 
-    rebuildRoutingIndex();
+    await rebuildRoutingIndex();
     return reply.code(201).send({ data: serialize(inserted) });
   });
 
   app.patch('/api/channels/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
-    const existing = db.select().from(channels).where(eq(channels.id, id)).get();
+    const existingRows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    const existing = existingRows[0];
     if (!existing) throw GatewayError.notFound('Channel not found');
 
     const input = parseChannelInput(request.body, true, existing.type as ChannelType);
@@ -211,20 +212,21 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
       patch['keys'] = encryptKeyList(input.keys);
     }
 
-    db.update(channels).set(patch).where(eq(channels.id, id)).run();
-    rebuildRoutingIndex();
+    await db.update(channels).set(patch).where(eq(channels.id, id));
+    await rebuildRoutingIndex();
 
-    const updated = db.select().from(channels).where(eq(channels.id, id)).get();
-    return reply.send({ data: serialize(updated!) });
+    const updatedRows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    return reply.send({ data: serialize(updatedRows[0]!) });
   });
 
   app.delete('/api/channels/:id', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
-    const existing = db.select().from(channels).where(eq(channels.id, id)).get();
+    const existingRows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    const existing = existingRows[0];
     if (!existing) throw GatewayError.notFound('Channel not found');
 
-    db.delete(channels).where(eq(channels.id, id)).run();
-    rebuildRoutingIndex();
+    await db.delete(channels).where(eq(channels.id, id));
+    await rebuildRoutingIndex();
     return reply.send({ ok: true });
   });
 
@@ -246,7 +248,8 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
    */
   app.post('/api/channels/:id/test', async (request: FastifyRequest, reply: FastifyReply) => {
     const id = v.int((request.params as Record<string, unknown>)['id'], 'id');
-    const row = db.select().from(channels).where(eq(channels.id, id)).get();
+    const selectedRows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+    const row = selectedRows[0];
     if (!row) throw GatewayError.notFound('Channel not found');
 
     const keys = decryptKeyList(row.keys);
@@ -301,13 +304,13 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
           if (baseUrl !== row.baseUrl) {
             // Remember the root that worked. The relay re-reads the row on
             // every request, so the fix applies immediately with no restart.
-            db.update(channels).set({ baseUrl }).where(eq(channels.id, id)).run();
+            await db.update(channels).set({ baseUrl }).where(eq(channels.id, id));
           }
 
-          db.update(channels)
+          await db
+            .update(channels)
             .set({ status: 'healthy', lastError: null, lastLatencyMs: latencyMs, lastTestedAt: Date.now() })
-            .where(eq(channels.id, id))
-            .run();
+            .where(eq(channels.id, id));
 
           return reply.send({ ok: true, message: 'Connected', latencyMs, model: targetModel, baseUrl });
         }
@@ -330,15 +333,15 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
 
     const final: Failure = failure ?? { statusCode: null, message: 'Connection failed', latencyMs: null };
 
-    db.update(channels)
+    await db
+      .update(channels)
       .set({
         status: 'failing',
         lastError: final.message.slice(0, 500),
         lastLatencyMs: final.latencyMs,
         lastTestedAt: Date.now(),
       })
-      .where(eq(channels.id, id))
-      .run();
+      .where(eq(channels.id, id));
 
     return reply.send({
       ok: false,

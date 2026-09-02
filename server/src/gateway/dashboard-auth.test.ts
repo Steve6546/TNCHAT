@@ -3,38 +3,48 @@ import { createHmac } from 'node:crypto';
 import { test } from 'node:test';
 
 import { config } from '../config.js';
-import { TOKEN_TTL_HOURS, TOKEN_TTL_MS, verifyToken } from './dashboard-auth.js';
+import { issueDashboardToken, verifyToken } from './dashboard-auth.js';
 
 /**
- * The dashboard countdown is client-side, but the deadline it counts to is not:
- * it comes from `exp` inside the signed token. If the server ever stopped
- * checking that instant, the countdown would keep ticking against a session
- * the server had already abandoned — the exact bug this guards.
+ * Dashboard tokens are signature-only by decision: no expiry, no server-side
+ * lifetime. The properties worth guarding are therefore (a) a legitimately
+ * issued token verifies, (b) any payload tampering fails the signature, and
+ * (c) a forged token signed with the wrong secret is refused — the signature
+ * is the *only* thing standing between the dashboard and an attacker.
  */
 
-function forge(exp: number): string {
-  const body = Buffer.from(JSON.stringify({ sub: 'admin', exp })).toString('base64url');
-  const signature = createHmac('sha256', config.sessionSecret).update(body).digest('base64url');
+function forgeToken(payload: unknown, secret: string = config.sessionSecret): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = createHmac('sha256', secret).update(body).digest('base64url');
   return `${body}.${signature}`;
 }
 
-test('a token is accepted right up to its expiry and refused after it', () => {
-  assert.equal(verifyToken(forge(Date.now() + TOKEN_TTL_MS)), true);
-  assert.equal(verifyToken(forge(Date.now() + 1_000)), true);
-  assert.equal(verifyToken(forge(Date.now())), false);
-  assert.equal(verifyToken(forge(Date.now() - 1)), false);
-  assert.equal(verifyToken(forge(Date.now() - TOKEN_TTL_MS)), false);
+test('a token issued by the server verifies and round-trips the identity', () => {
+  const token = issueDashboardToken({ sub: 'user-123', email: 'a@b.co' });
+  const identity = verifyToken(token);
+
+  assert.ok(identity);
+  assert.equal(identity.sub, 'user-123');
+  assert.equal(identity.email, 'a@b.co');
 });
 
-test('the lifetime handed to the dashboard matches the one enforced here', () => {
-  assert.equal(TOKEN_TTL_HOURS, 12);
-  assert.equal(TOKEN_TTL_MS, 12 * 60 * 60 * 1000);
+test('a token signed with the wrong secret is refused', () => {
+  const forged = forgeToken({ sub: 'user-123', email: 'a@b.co' }, 'not-the-session-secret');
+  assert.equal(verifyToken(forged), null);
 });
 
-test('a token whose expiry was pushed forward is refused, signature or not', () => {
-  // A tampered payload must fail the signature check rather than be trusted.
-  const body = Buffer.from(
-    JSON.stringify({ sub: 'admin', exp: Date.now() + TOKEN_TTL_MS * 10 }),
-  ).toString('base64url');
-  assert.equal(verifyToken(`${body}.not-a-real-signature`), false);
+test('a tampered payload is refused even with a structurally valid token', () => {
+  const token = issueDashboardToken({ sub: 'user-123', email: 'a@b.co' });
+  const [body] = token.split('.');
+  const tampered = Buffer.from(JSON.stringify({ sub: 'admin', email: 'x@y.z' })).toString('base64url');
+  assert.notEqual(body, tampered);
+  assert.equal(verifyToken(`${tampered}.${token.split('.')[1]}`), null);
+});
+
+test('malformed tokens are refused without throwing', () => {
+  assert.equal(verifyToken(null), null);
+  assert.equal(verifyToken(''), null);
+  assert.equal(verifyToken('no-dots-here'), null);
+  assert.equal(verifyToken('a.b.c'), null);
+  assert.equal(verifyToken('not-base64..not-signature'), null);
 });

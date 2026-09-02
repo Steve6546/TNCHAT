@@ -1,8 +1,8 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { GatewayError } from '../core/errors.js';
-import { db } from '../db/index.js';
+import { db, pg } from '../db/index.js';
 import { requestLogs } from '../db/schema.js';
 import * as v from '../lib/validate.js';
 
@@ -48,9 +48,9 @@ interface RecentRow {
   upstream_format: string;
   total_tokens: number;
   status_code: number;
-  ok: number;
+  ok: boolean;
   latency_ms: number;
-  is_stream: number;
+  is_stream: boolean;
   error_message: string | null;
   created_at: number;
 }
@@ -80,85 +80,91 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
     const today = startOfToday();
     const since = today - 13 * 24 * 60 * 60 * 1000;
 
-    const totals = db
-      .all<TotalsRow>(sql`
-        SELECT
-          COUNT(*) AS requests,
-          COALESCE(SUM(total_tokens), 0) AS tokens,
-          COALESCE(AVG(latency_ms), 0) AS avg_latency,
-          COALESCE(SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END), 0) AS successes,
-          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-          COALESCE(SUM(cached_tokens), 0) AS cached_tokens
-        FROM request_logs
-        WHERE created_at >= ${today}
-      `)
-      .at(0);
-
-    const lifetime = db
-      .all<TotalsRow>(sql`
-        SELECT
-          COUNT(*) AS requests,
-          COALESCE(SUM(total_tokens), 0) AS tokens,
-          COALESCE(AVG(latency_ms), 0) AS avg_latency,
-          COALESCE(SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END), 0) AS successes,
-          COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-          COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-          COALESCE(SUM(cached_tokens), 0) AS cached_tokens
-        FROM request_logs
-      `)
-      .at(0);
-
-    const series = db.all<SeriesRow>(sql`
+    // Raw queries go through the postgres client directly: these are
+    // aggregations, not table-mapped operations, and Postgres answers them
+    // with bigint SUM/AVG columns that map cleanly onto the row types below.
+    const totalsRows = (await pg`
       SELECT
-        date(created_at / 1000, 'unixepoch', 'localtime') AS day,
-        COUNT(*) AS requests,
-        COALESCE(SUM(total_tokens), 0) AS tokens,
-        COALESCE(SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END), 0) AS successes
+        COUNT(*)::int AS requests,
+        COALESCE(SUM(total_tokens), 0)::bigint AS tokens,
+        COALESCE(AVG(latency_ms), 0)::float8 AS avg_latency,
+        COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0)::int AS successes,
+        COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+        COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+      FROM request_logs
+      WHERE created_at >= ${today}
+    `) as unknown as TotalsRow[];
+    const totals = totalsRows[0];
+
+    const lifetimeRows = (await pg`
+      SELECT
+        COUNT(*)::int AS requests,
+        COALESCE(SUM(total_tokens), 0)::bigint AS tokens,
+        COALESCE(AVG(latency_ms), 0)::float8 AS avg_latency,
+        COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0)::int AS successes,
+        COALESCE(SUM(prompt_tokens), 0)::bigint AS prompt_tokens,
+        COALESCE(SUM(completion_tokens), 0)::bigint AS completion_tokens,
+        COALESCE(SUM(cached_tokens), 0)::bigint AS cached_tokens
+      FROM request_logs
+    `) as unknown as TotalsRow[];
+    const lifetime = lifetimeRows[0];
+
+    const seriesRows = (await pg`
+      SELECT
+        to_char(to_timestamp(created_at / 1000.0), 'YYYY-MM-DD') AS day,
+        COUNT(*)::int AS requests,
+        COALESCE(SUM(total_tokens), 0)::bigint AS tokens,
+        COALESCE(SUM(CASE WHEN ok THEN 1 ELSE 0 END), 0)::int AS successes
       FROM request_logs
       WHERE created_at >= ${since}
       GROUP BY day
       ORDER BY day
-    `);
+    `) as unknown as SeriesRow[];
 
-    const byModel = db.all<BreakdownRow>(sql`
+    const byModelRows = (await pg`
       SELECT
         model AS name,
-        COUNT(*) AS requests,
-        COALESCE(SUM(total_tokens), 0) AS tokens,
-        COALESCE(AVG(latency_ms), 0) AS avg_latency,
-        COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS errors
+        COUNT(*)::int AS requests,
+        COALESCE(SUM(total_tokens), 0)::bigint AS tokens,
+        COALESCE(AVG(latency_ms), 0)::float8 AS avg_latency,
+        COALESCE(SUM(CASE WHEN ok = false THEN 1 ELSE 0 END), 0)::int AS errors
       FROM request_logs
       GROUP BY model
       ORDER BY requests DESC
       LIMIT 20
-    `);
+    `) as unknown as BreakdownRow[];
 
-    const byChannel = db.all<BreakdownRow>(sql`
+    const byChannelRows = (await pg`
       SELECT
         COALESCE(NULLIF(channel_name, ''), 'unknown') AS name,
-        COUNT(*) AS requests,
-        COALESCE(SUM(total_tokens), 0) AS tokens,
-        COALESCE(AVG(latency_ms), 0) AS avg_latency,
-        COALESCE(SUM(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0) AS errors
+        COUNT(*)::int AS requests,
+        COALESCE(SUM(total_tokens), 0)::bigint AS tokens,
+        COALESCE(AVG(latency_ms), 0)::float8 AS avg_latency,
+        COALESCE(SUM(CASE WHEN ok = false THEN 1 ELSE 0 END), 0)::int AS errors
       FROM request_logs
       GROUP BY name
       ORDER BY requests DESC
       LIMIT 20
-    `);
+    `) as unknown as BreakdownRow[];
 
     // Only the recent-requests table is filtered. The headline metrics stay
     // unfiltered so "requests today" never changes when someone toggles a view.
-    const columns = sql`
-      SELECT id, model, upstream_model, channel_name, client_format, upstream_format,
-             total_tokens, status_code, ok, latency_ms, is_stream, error_message, created_at
-      FROM request_logs
-    `;
-
-    const recent =
+    const recentRows =
       okFilter === undefined
-        ? db.all<RecentRow>(sql`${columns} ORDER BY id DESC LIMIT 25`)
-        : db.all<RecentRow>(sql`${columns} WHERE ok = ${okFilter ? 1 : 0} ORDER BY id DESC LIMIT 25`);
+        ? ((await pg`
+            SELECT id, model, upstream_model, channel_name, client_format, upstream_format,
+                   total_tokens, status_code, ok, latency_ms, is_stream, error_message, created_at
+            FROM request_logs
+            ORDER BY id DESC LIMIT 25
+          `) as unknown as RecentRow[])
+        : ((await pg`
+            SELECT id, model, upstream_model, channel_name, client_format, upstream_format,
+                   total_tokens, status_code, ok, latency_ms, is_stream, error_message, created_at
+            FROM request_logs
+            WHERE ok = ${okFilter}
+            ORDER BY id DESC LIMIT 25
+          `) as unknown as RecentRow[]);
 
     const todayRequests = totals?.requests ?? 0;
     const todaySuccesses = totals?.successes ?? 0;
@@ -183,27 +189,27 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
               ? null
               : (lifetime?.successes ?? 0) / (lifetime?.requests ?? 1),
         },
-        series: series.map((row) => ({
+        series: seriesRows.map((row) => ({
           day: row.day,
           requests: row.requests,
           tokens: round(row.tokens),
           successes: row.successes,
         })),
-        byModel: byModel.map((row) => ({
+        byModel: byModelRows.map((row) => ({
           name: row.name,
           requests: row.requests,
           tokens: round(row.tokens),
           avgLatencyMs: round(row.avg_latency),
           errors: row.errors,
         })),
-        byChannel: byChannel.map((row) => ({
+        byChannel: byChannelRows.map((row) => ({
           name: row.name,
           requests: row.requests,
           tokens: round(row.tokens),
           avgLatencyMs: round(row.avg_latency),
           errors: row.errors,
         })),
-        recent: recent.map((row) => ({
+        recent: recentRows.map((row) => ({
           id: row.id,
           model: row.model,
           upstreamModel: row.upstream_model,
@@ -212,11 +218,11 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
           upstreamFormat: row.upstream_format,
           totalTokens: row.total_tokens,
           statusCode: row.status_code,
-          ok: row.ok === 1,
+          ok: row.ok === true,
           latencyMs: row.latency_ms,
-          isStream: row.is_stream === 1,
+          isStream: row.is_stream === true,
           errorMessage: row.error_message,
-          createdAt: row.created_at,
+          createdAt: Number(row.created_at),
         })),
       },
     });
@@ -237,11 +243,11 @@ export async function registerStatsRoutes(app: FastifyInstance): Promise<void> {
     const query = (request.query ?? {}) as Record<string, unknown>;
     const scope = query['scope'] === undefined ? 'errors' : v.oneOf(query['scope'], 'scope', LOG_SCOPES);
 
-    const result =
+    const deletedRows =
       scope === 'all'
-        ? db.delete(requestLogs).run()
-        : db.delete(requestLogs).where(eq(requestLogs.ok, false)).run();
+        ? await db.delete(requestLogs).returning({ id: requestLogs.id })
+        : await db.delete(requestLogs).where(eq(requestLogs.ok, false)).returning({ id: requestLogs.id });
 
-    return reply.send({ ok: true, deleted: result.changes });
+    return reply.send({ ok: true, deleted: deletedRows.length });
   });
 }

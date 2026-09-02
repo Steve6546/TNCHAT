@@ -1,7 +1,4 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 
 /**
@@ -19,26 +16,37 @@ import { after, before, describe, test } from 'node:test';
  * Everything is exercised through the real HTTP surface — `app.inject()` for
  * the dashboard routes, a stubbed `fetch` standing in for the provider — so
  * what is asserted here is what a user pressing "Test" actually triggers.
+ *
+ * Runs against the configured Supabase `DATABASE_URL` and cleans up only the
+ * rows it created.
  */
 
-const dataDir = mkdtempSync(path.join(tmpdir(), 'acc-custom-provider-'));
-process.env.ACC_DATA_DIR = dataDir;
-process.env.MASTER_KEY = 'simulation-master-key-0123456789abcdef';
-process.env.SESSION_SECRET = 'simulation-session-secret-0123456789abcdef';
+process.env.MASTER_KEY = process.env.MASTER_KEY ?? 'simulation-master-key-0123456789abcdef';
+process.env.SESSION_SECRET = process.env.SESSION_SECRET ?? 'simulation-session-secret-0123456789abcdef';
 process.env.LOG_LEVEL = 'silent';
 
 const { buildApp } = await import('../app.js');
 const { migrate } = await import('../db/migrate.js');
-const { db } = await import('../db/index.js');
+const { db, pg } = await import('../db/index.js');
 const { apiKeys, channels } = await import('../db/schema.js');
 const { rebuildRoutingIndex } = await import('../gateway/ability-index.js');
+const { issueDashboardToken } = await import('../gateway/dashboard-auth.js');
 const { candidateBaseUrls } = await import('../adapters/index.js');
 const { hashApiKey, normalizeApiKey } = await import('../lib/crypto.js');
-const { eq } = await import('drizzle-orm');
+const { eq, inArray } = await import('drizzle-orm');
 
-const ADMIN_PASSWORD = 'simulation-password-123';
 const CLIENT_KEY = 'sk-simulation-client-key-000000000000';
 const UPSTREAM_KEY = 'sk-upstream-key-simulation';
+
+/** Every channel name this suite creates; cleanup never touches other rows. */
+const CREATED_CHANNEL_NAMES = [
+  'Bare host',
+  'Wrong key',
+  'Wrong host',
+  'Any provider',
+  'Free local API',
+  'Messy endpoint',
+];
 
 interface UpstreamReply {
   status: number;
@@ -105,18 +113,19 @@ async function createChannel(payload: Record<string, unknown>): Promise<Record<s
 }
 
 /** The stored row, bypassing the API's serialisation. */
-function storedColumn(id: number, column: 'baseUrl' | 'authStyle' | 'extraHeaders'): unknown {
-  const row = db.select().from(channels).where(eq(channels.id, id)).get();
+async function storedColumn(id: number, column: 'baseUrl' | 'authStyle' | 'extraHeaders'): Promise<unknown> {
+  const rows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+  const row = rows[0];
   assert.ok(row, `channel ${id} should exist`);
   return row[column];
 }
 
 /** A client key, so the relay route accepts a request. Idempotent. */
-function seedClientKey(): void {
-  const existing = db.select().from(apiKeys).all();
+async function seedClientKey(): Promise<void> {
+  const existing = await db.select().from(apiKeys).where(eq(apiKeys.name, 'simulation-client')).limit(1);
   if (existing.length > 0) return;
 
-  db.insert(apiKeys)
+  await db.insert(apiKeys)
     .values({
       name: 'simulation-client',
       keyHash: hashApiKey(normalizeApiKey(CLIENT_KEY)),
@@ -126,34 +135,28 @@ function seedClientKey(): void {
       status: 'active',
       expiresAt: null,
       createdAt: Date.now(),
-    })
-    .run();
-  rebuildRoutingIndex();
+    });
+  await rebuildRoutingIndex();
 }
 
 before(async () => {
-  migrate();
+  await migrate();
   installFetchStub();
   app = await buildApp();
   await app.ready();
 
-  const setup = await app.inject({
-    method: 'POST',
-    url: '/api/auth/setup',
-    payload: { password: ADMIN_PASSWORD },
-  });
-  assert.equal(setup.statusCode, 201);
-  authHeaders = { authorization: `Bearer ${setup.json().data.token as string}` };
+  // Dashboard auth is Supabase-backed, so tests sign their own token with the
+  // session secret instead of driving the login flow.
+  const token = issueDashboardToken({ sub: 'test-runner', email: 'test@simulation.local' });
+  authHeaders = { authorization: `Bearer ${token}` };
 });
 
 after(async () => {
   globalThis.fetch = realFetch;
   await app.close().catch(() => undefined);
-  try {
-    rmSync(dataDir, { recursive: true, force: true });
-  } catch {
-    // A locked file on Windows is not worth failing the suite over.
-  }
+  await db.delete(channels).where(inArray(channels.name, CREATED_CHANNEL_NAMES)).catch(() => undefined);
+  await db.delete(apiKeys).where(eq(apiKeys.name, 'simulation-client')).catch(() => undefined);
+  await pg.end();
 });
 
 describe('endpoint candidates', () => {
@@ -222,7 +225,7 @@ describe('the probe resolves a missing version segment', () => {
     ]);
 
     // Persisted, so the next probe — and every relay call — goes straight there.
-    assert.equal(storedColumn(created['id'] as number, 'baseUrl'), 'https://api.example.com/v1');
+    assert.equal(await storedColumn(created['id'] as number, 'baseUrl'), 'https://api.example.com/v1');
   });
 
   test('a 401 is not retried against a different path', async () => {
@@ -303,7 +306,7 @@ describe('custom channels talk to any API', () => {
     // Not rewritten on the way in: no path appended, none peeled.
     assert.equal(created['baseUrl'], 'https://api.example.com/v1/chat/completions');
 
-    seedClientKey();
+    await seedClientKey();
 
     const relay = await app.inject({
       method: 'POST',
@@ -338,7 +341,7 @@ describe('custom channels talk to any API', () => {
       extraHeaders: {},
     });
 
-    seedClientKey();
+    await seedClientKey();
     // The channel must be routable before the relay will pick it.
     await app.inject({
       method: 'POST',
@@ -371,7 +374,7 @@ describe('custom channels talk to any API', () => {
       authStyle: 'bearer',
     });
 
-    seedClientKey();
+    await seedClientKey();
 
     const relay = await app.inject({
       method: 'POST',

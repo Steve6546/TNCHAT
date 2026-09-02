@@ -1,11 +1,12 @@
 import { config } from './config.js';
 import { migrate } from './db/migrate.js';
+import { pg } from './db/index.js';
 import { buildApp } from './app.js';
 import { rebuildRoutingIndex } from './gateway/ability-index.js';
 
 async function main(): Promise<void> {
-  migrate();
-  rebuildRoutingIndex();
+  await migrate();
+  await rebuildRoutingIndex();
 
   const app = await buildApp();
 
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
     console.log(`\n[server] ${signal} received, shutting down`);
     try {
       await app.close();
+      await pg.end();
       process.exit(0);
     } catch (error) {
       console.error('[server] error during shutdown', error);

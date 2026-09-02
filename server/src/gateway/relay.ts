@@ -78,8 +78,9 @@ interface ChannelRecord {
 /** Round-robin cursor per channel, mirroring MultiKeyPollingIndex. */
 const keyCursor = new Map<number, number>();
 
-function loadChannel(id: number): ChannelRecord | null {
-  const row = db.select().from(channels).where(eq(channels.id, id)).get();
+async function loadChannel(id: number): Promise<ChannelRecord | null> {
+  const rows = await db.select().from(channels).where(eq(channels.id, id)).limit(1);
+  const row = rows[0];
   if (!row) return null;
 
   return {
@@ -176,7 +177,7 @@ export async function relay(request: RelayRequest): Promise<RelayOutcome> {
       break;
     }
 
-    const channel = loadChannel(selection.ability.channelId);
+    const channel = await loadChannel(selection.ability.channelId);
     if (!channel || !channel.enabled) {
       lastError = GatewayError.noChannel(model);
       continue;
@@ -222,13 +223,13 @@ export async function relay(request: RelayRequest): Promise<RelayOutcome> {
 
       if (outcome.ok) {
         recordChannelAffinity(String(auth.keyId), auth.group, model, channel.id);
-        markChannelHealthy(channel.id, Date.now() - startedAt);
+        void markChannelHealthy(channel.id, Date.now() - startedAt);
       }
       return outcome;
     } catch (error) {
       const gatewayError = toGatewayError(error);
       lastError = gatewayError;
-      markChannelFailing(channel.id, gatewayError.message);
+      void markChannelFailing(channel.id, gatewayError.message);
 
       if (gatewayError.skipRetry || retryIndex === attempts - 1) break;
     }
@@ -507,18 +508,26 @@ async function streamToClient(args: {
   return outcome;
 }
 
-function markChannelHealthy(channelId: number, latencyMs: number): void {
-  db.update(channels)
-    .set({ status: 'healthy', lastLatencyMs: latencyMs, lastTestedAt: Date.now(), lastError: null, updatedAt: Date.now() })
-    .where(eq(channels.id, channelId))
-    .run();
+async function markChannelHealthy(channelId: number, latencyMs: number): Promise<void> {
+  try {
+    await db
+      .update(channels)
+      .set({ status: 'healthy', lastLatencyMs: latencyMs, lastTestedAt: Date.now(), lastError: null, updatedAt: Date.now() })
+      .where(eq(channels.id, channelId));
+  } catch (error) {
+    console.error('[relay] failed to record channel health:', error);
+  }
 }
 
-function markChannelFailing(channelId: number, message: string): void {
-  db.update(channels)
-    .set({ status: 'failing', lastError: message.slice(0, 500), lastTestedAt: Date.now(), updatedAt: Date.now() })
-    .where(eq(channels.id, channelId))
-    .run();
+async function markChannelFailing(channelId: number, message: string): Promise<void> {
+  try {
+    await db
+      .update(channels)
+      .set({ status: 'failing', lastError: message.slice(0, 500), lastTestedAt: Date.now(), updatedAt: Date.now() })
+      .where(eq(channels.id, channelId));
+  } catch (error) {
+    console.error('[relay] failed to record channel failure:', error);
+  }
   clearChannelAffinity(channelId);
 }
 
@@ -538,9 +547,9 @@ interface LogArgs {
 }
 
 /** Fire-and-forget: analytics must never break a relay in flight. */
-function logRequest(args: LogArgs): void {
+async function logRequest(args: LogArgs): Promise<void> {
   try {
-    db.insert(requestLogs)
+    await db.insert(requestLogs)
       .values({
         keyId: args.auth.keyId,
         keyName: args.auth.keyName,
@@ -559,8 +568,7 @@ function logRequest(args: LogArgs): void {
         latencyMs: args.latencyMs,
         isStream: args.isStream,
         errorMessage: args.errorMessage?.slice(0, 500) ?? null,
-      })
-      .run();
+      });
   } catch (error) {
     console.error('[relay] failed to write request log:', error);
   }

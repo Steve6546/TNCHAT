@@ -1,27 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import path from 'node:path';
+import { eq } from 'drizzle-orm';
 import { after, before, describe, test } from 'node:test';
 
 /**
  * Claude Code compatibility, exercised end to end.
  *
- * The environment is pointed at a throwaway directory *before* anything from
- * the project is imported, because `config.ts` resolves paths at import time.
- * Every project import below is therefore dynamic: a static import would be
- * hoisted above the assignment and open the developer's real database.
+ * The database is Supabase Postgres, so these tests run against the configured
+ * `DATABASE_URL`. They only ever touch rows they seeded themselves — the
+ * channel named "Simulation Anthropic" and the API key named "simulation" —
+ * so a database holding real channels is never disturbed.
  */
 
-const dataDir = mkdtempSync(path.join(tmpdir(), 'acc-claude-code-'));
-process.env.ACC_DATA_DIR = dataDir;
-process.env.MASTER_KEY = 'simulation-master-key-0123456789abcdef';
-process.env.SESSION_SECRET = 'simulation-session-secret-0123456789abcdef';
+process.env.MASTER_KEY = process.env.MASTER_KEY ?? 'simulation-master-key-0123456789abcdef';
+process.env.SESSION_SECRET = process.env.SESSION_SECRET ?? 'simulation-session-secret-0123456789abcdef';
 process.env.LOG_LEVEL = 'silent';
 
 const { buildApp } = await import('../app.js');
 const { migrate } = await import('../db/migrate.js');
-const { db } = await import('../db/index.js');
+const { db, pg } = await import('../db/index.js');
 const { apiKeys, channels } = await import('../db/schema.js');
 const { rebuildRoutingIndex } = await import('../gateway/ability-index.js');
 const { normalizeBaseUrl } = await import('../adapters/index.js');
@@ -31,7 +27,9 @@ const { hashApiKey, normalizeApiKey } = await import('../lib/crypto.js');
 const { encryptKeyList } = await import('../lib/secrets.js');
 const { RelayFormat } = await import('../core/formats.js');
 
-const CLIENT_KEY = 'sk-simulation-client-key-000000000000';
+// Distinct from every other suite's client key: suites run in parallel
+// against the same database, and api_keys.key_hash is unique.
+const CLIENT_KEY = 'sk-sim-cc-client-key-00000000000001';
 const UPSTREAM_KEY = 'sk-ant-upstream-key-simulation';
 
 /**
@@ -149,10 +147,10 @@ function installFetchStub(): void {
 }
 
 /** Insert a channel + a client key, then make them routable. */
-function seedChannel(options: { baseUrl?: string; mapping?: Record<string, string> } = {}): void {
+async function seedChannel(options: { baseUrl?: string; mapping?: Record<string, string> } = {}): Promise<void> {
   const now = Date.now();
 
-  db.insert(channels)
+  await db.insert(channels)
     .values({
       name: 'Simulation Anthropic',
       type: 'anthropic',
@@ -166,10 +164,9 @@ function seedChannel(options: { baseUrl?: string; mapping?: Record<string, strin
       enabled: true,
       createdAt: now,
       updatedAt: now,
-    })
-    .run();
+    });
 
-  db.insert(apiKeys)
+  await db.insert(apiKeys)
     .values({
       name: 'simulation',
       keyHash: hashApiKey(normalizeApiKey(CLIENT_KEY)),
@@ -179,16 +176,21 @@ function seedChannel(options: { baseUrl?: string; mapping?: Record<string, strin
       status: 'active',
       expiresAt: null,
       createdAt: now,
-    })
-    .run();
+    });
 
-  rebuildRoutingIndex();
+  await rebuildRoutingIndex();
+}
+
+/** Remove exactly the rows this suite seeds — nothing else. */
+async function cleanSimulationRows(): Promise<void> {
+  await db.delete(channels).where(eq(channels.name, 'Simulation Anthropic'));
+  await db.delete(apiKeys).where(eq(apiKeys.name, 'simulation'));
 }
 
 let app: Awaited<ReturnType<typeof buildApp>>;
 
 before(async () => {
-  migrate();
+  await migrate();
   installFetchStub();
   app = await buildApp();
   await app.ready();
@@ -197,19 +199,14 @@ before(async () => {
 after(async () => {
   globalThis.fetch = realFetch;
   await app.close().catch(() => undefined);
-  try {
-    rmSync(dataDir, { recursive: true, force: true });
-  } catch {
-    // Windows keeps the SQLite handle open briefly; leaving a temp directory
-    // behind is not worth failing the suite over.
-  }
+  await cleanSimulationRows().catch(() => undefined);
+  await pg.end();
 });
 
 describe('Claude Code reaches the provider untouched', () => {
   test('thinking, effort, tools and beta headers all arrive upstream', async () => {
-    db.delete(channels).run();
-    db.delete(apiKeys).run();
-    seedChannel();
+    await cleanSimulationRows();
+    await seedChannel();
     captured = [];
 
     const body = claudeCodeBody();
@@ -241,9 +238,8 @@ describe('Claude Code reaches the provider untouched', () => {
   });
 
   test('model mapping rewrites the model and nothing else', async () => {
-    db.delete(channels).run();
-    db.delete(apiKeys).run();
-    seedChannel({ mapping: { 'claude-sonnet-5': 'MiniMaxAI/MiniMax-M3' } });
+    await cleanSimulationRows();
+    await seedChannel({ mapping: { 'claude-sonnet-5': 'MiniMaxAI/MiniMax-M3' } });
     captured = [];
 
     const body = claudeCodeBody();
@@ -265,9 +261,8 @@ describe('Claude Code reaches the provider untouched', () => {
   });
 
   test('a pasted endpoint URL does not get the endpoint appended twice', async () => {
-    db.delete(channels).run();
-    db.delete(apiKeys).run();
-    seedChannel({ baseUrl: 'https://upstream.test/v1/messages' });
+    await cleanSimulationRows();
+    await seedChannel({ baseUrl: 'https://upstream.test/v1/messages' });
     captured = [];
 
     const response = await app.inject({

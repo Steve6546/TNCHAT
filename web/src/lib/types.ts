@@ -25,15 +25,29 @@ export const CHANNEL_TYPE_OPTIONS: ChannelTypeOption[] = [
   { kind: 'custom', label: 'مخصّص (أي API خارجي)', upstreamFormat: 'openai' },
 ];
 
-/** What the server returns when it issues a dashboard session. */
-export interface SessionPayload {
+/**
+ * The dashboard session issued after Supabase sign-in or sign-up.
+ *
+ * `token` authorises `/api/*`. There is no expiry field by design: the session
+ * lasts until the user signs out or the browser tab closes.
+ * `supabaseAccessToken` lets the settings page manage the account (password
+ * change) directly with Supabase.
+ */
+export interface AuthSession {
   token: string;
-  /** ISO-8601 instant — when the server stops accepting this token. */
-  expiresAt: string;
-  /** ISO-8601 instant — the server's own clock at issue time, for skew correction. */
-  serverTime: string;
-  expiresInHours: number;
+  email: string;
+  supabaseAccessToken: string;
+  supabaseRefreshToken: string;
 }
+
+/** Response of a sign-up attempt when the project confirms emails first. */
+export interface SignupNeedsConfirmation {
+  needsConfirmation: true;
+  email: string;
+  message: string;
+}
+
+export type SignupResponse = ({ needsConfirmation: false } & AuthSession) | SignupNeedsConfirmation;
 
 /** Mirrors `safeConfigSummary()` on the server — safe to display anywhere. */
 export interface HealthInfo {
@@ -49,6 +63,8 @@ export interface HealthInfo {
     retryTimes: number;
     requestTimeoutMs: number;
     streamingTimeoutMs: number;
+    database: string;
+    supabaseHost: string;
     masterKeySource: string;
     sessionSecretSource: string;
     cors: string | string[];

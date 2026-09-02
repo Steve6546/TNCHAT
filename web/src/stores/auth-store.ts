@@ -1,20 +1,28 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import type { SessionPayload } from '../lib/types';
-import { clockSkew } from '../lib/session';
+import type { AuthSession } from '../lib/types';
 
+/**
+ * The dashboard session.
+ *
+ * `token` authorises `/api/*` calls. It has no server-side expiry: a session
+ * ends only when the user signs out or this browser tab closes — the store
+ * persists to `sessionStorage`, which the browser drops with the tab.
+ *
+ * `supabaseAccessToken` is kept alongside so the settings page can manage the
+ * Supabase account (password change) directly.
+ */
 interface AuthState {
   token: string | null;
-  /** Expiry as an instant on the *server's* clock, in epoch ms. */
-  expiresAt: number | null;
-  /** Server clock − browser clock, measured when the session was issued. */
-  skewMs: number;
-  setSession: (session: SessionPayload) => void;
+  email: string | null;
+  supabaseAccessToken: string | null;
+  setSession: (session: AuthSession) => void;
+  setSupabaseAccessToken: (accessToken: string) => void;
   logout: () => void;
 }
 
-const EMPTY = { token: null, expiresAt: null, skewMs: 0 };
+const EMPTY = { token: null, email: null, supabaseAccessToken: null };
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -23,9 +31,10 @@ export const useAuthStore = create<AuthState>()(
       setSession: (session) =>
         set({
           token: session.token,
-          expiresAt: Date.parse(session.expiresAt) || null,
-          skewMs: clockSkew(session.serverTime),
+          email: session.email,
+          supabaseAccessToken: session.supabaseAccessToken,
         }),
+      setSupabaseAccessToken: (accessToken) => set({ supabaseAccessToken: accessToken }),
       logout: () => set({ ...EMPTY }),
     }),
     {
@@ -33,8 +42,8 @@ export const useAuthStore = create<AuthState>()(
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         token: state.token,
-        expiresAt: state.expiresAt,
-        skewMs: state.skewMs,
+        email: state.email,
+        supabaseAccessToken: state.supabaseAccessToken,
       }),
     },
   ),

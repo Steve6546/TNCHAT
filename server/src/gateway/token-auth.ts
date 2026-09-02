@@ -48,7 +48,7 @@ export function extractApiKey(headers: Record<string, unknown>, query: Record<st
   return null;
 }
 
-export function authenticate(rawKey: string | null): AuthContext {
+export async function authenticate(rawKey: string | null): Promise<AuthContext> {
   if (!rawKey) {
     throw GatewayError.unauthorized('Missing API key. Send Authorization: Bearer sk-... or x-api-key.');
   }
@@ -59,7 +59,8 @@ export function authenticate(rawKey: string | null): AuthContext {
   }
 
   const hash = hashApiKey(normalized);
-  const row = db.select().from(apiKeys).where(eq(apiKeys.keyHash, hash)).get();
+  const rows = await db.select().from(apiKeys).where(eq(apiKeys.keyHash, hash)).limit(1);
+  const row = rows[0];
 
   if (!row) throw GatewayError.unauthorized();
   if (row.status !== 'active') {
@@ -69,7 +70,7 @@ export function authenticate(rawKey: string | null): AuthContext {
     throw GatewayError.forbidden('This API key has expired');
   }
 
-  db.update(apiKeys).set({ lastUsedAt: Date.now() }).where(eq(apiKeys.id, row.id)).run();
+  await db.update(apiKeys).set({ lastUsedAt: Date.now() }).where(eq(apiKeys.id, row.id));
 
   return {
     keyId: row.id,

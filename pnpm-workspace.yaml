@@ -9,8 +9,11 @@ packages:
 catalog:
   typescript: ^5.9.2
 
-# Native modules that must be built from source instead of downloading a
-# prebuilt binary. better-sqlite3 ships prebuilds for every supported
-# platform, and allowing an unreviewed build script is a supply-chain risk.
-onlyBuiltDependencies:
+# drizzle-orm declares every driver it supports as an *optional* peer, and
+# pnpm resolves them anyway. better-sqlite3 is one of them — a native module
+# this project stopped using when the data layer moved to Supabase Postgres
+# via postgres-js. Nothing imports it, so its build script is skipped: that
+# removes a compiler-toolchain dependency from every clean install without
+# changing resolution.
+ignoredBuiltDependencies:
   - better-sqlite3

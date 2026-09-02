@@ -1,16 +1,14 @@
-import { BarChart3, KeyRound, LogOut, Menu, Moon, Settings, Sun, Timer, Waypoints } from 'lucide-react';
+import { BarChart3, KeyRound, LogOut, Menu, Moon, Settings, Sun, Waypoints } from 'lucide-react';
 import { useCallback, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 
+import { endpoints } from '../../lib/api';
 import { cn } from '../../lib/utils';
-import { sessionDeadline } from '../../lib/session';
 import { useAuthStore } from '../../stores/auth-store';
 import { useThemeStore } from '../../stores/theme-store';
-import { Countdown } from '../shared/countdown';
 import { Logo } from '../shared/logo';
 import { Button } from '../ui/button';
 import { Sheet, SheetContent, SheetTitle } from '../ui/sheet';
-import { useToast } from '../ui/toast';
 
 const navigation = [
   { to: '/', label: 'نظرة عامة', icon: BarChart3 },
@@ -45,28 +43,21 @@ function Navigation({ onSelect }: { onSelect?: () => void }) {
 
 function SidebarFooter() {
   const navigate = useNavigate();
-  const toast = useToast();
   const logout = useAuthStore((state) => state.logout);
+  const supabaseAccessToken = useAuthStore((state) => state.supabaseAccessToken);
   const { theme, setTheme } = useThemeStore();
 
   const handleLogout = useCallback(() => {
+    // Invalidate the Supabase session server-side (best-effort), then drop
+    // the dashboard token. The token lives in sessionStorage, so closing the
+    // tab ends the session anyway.
+    void endpoints.logout(supabaseAccessToken).catch(() => undefined);
     logout();
     navigate('/login', { replace: true });
-  }, [logout, navigate]);
-
-  /**
-   * Reaching 00:00:00 means the server already refuses this token, so drop it
-   * here — with an explanation — instead of letting the next click fail with a
-   * 401 the user cannot account for.
-   */
-  const handleExpire = useCallback(() => {
-    toast.error('انتهت صلاحية الجلسة — سجّل الدخول من جديد');
-    handleLogout();
-  }, [handleLogout, toast]);
+  }, [logout, navigate, supabaseAccessToken]);
 
   return (
     <div className="mt-auto border-t border-border p-3">
-      <SessionRemaining onExpire={handleExpire} />
       <div className="flex items-center gap-1">
         <Button
           variant="ghost"
@@ -82,33 +73,6 @@ function SidebarFooter() {
           تسجيل الخروج
         </Button>
       </div>
-    </div>
-  );
-}
-
-/**
- * Remaining session time, counted down to the deadline the server stated.
- *
- * The server sends `expiresAt` when it issues the token, so the number is an
- * absolute instant rather than a stopwatch: it survives a reload, agrees across
- * tabs, and is corrected for the difference between this browser's clock and
- * the server's. When it reaches zero the session is already invalid server-side,
- * so we sign out instead of letting the next request fail with a 401 the user
- * cannot explain.
- */
-function SessionRemaining({ onExpire }: { onExpire: () => void }) {
-  const token = useAuthStore((state) => state.token);
-  const expiresAt = useAuthStore((state) => state.expiresAt);
-  const skewMs = useAuthStore((state) => state.skewMs);
-
-  const deadline = sessionDeadline(expiresAt, token, skewMs);
-  if (deadline === null) return null;
-
-  return (
-    <div className="mb-2 flex items-center gap-2 px-1 text-xs text-muted-foreground">
-      <Timer className="size-3.5 shrink-0" />
-      <span className="truncate">تنتهي الجلسة بعد</span>
-      <Countdown deadline={deadline} className="font-medium" onExpire={onExpire} />
     </div>
   );
 }

@@ -234,8 +234,14 @@ export function ChannelsPage() {
   const mappingError = firstMappingError(form.modelMapping);
   const endpointHelp = ENDPOINT_HELP[form.type];
 
-  const channelTypes: ChannelTypeOption[] =
-    types.data?.data && types.data.data.length > 0 ? types.data.data : CHANNEL_TYPE_OPTIONS;
+  /**
+   * MiniMax stays routable for channels already configured with it, but it is
+   * no longer offered when adding a channel: it is one specific hosted API,
+   * and «OpenAI-compatible» (or «مخصّص») covers that case generically.
+   */
+  const channelTypes: ChannelTypeOption[] = (
+    types.data?.data && types.data.data.length > 0 ? types.data.data : CHANNEL_TYPE_OPTIONS
+  ).filter((option) => option.kind !== 'minimax' || editing?.type === 'minimax');
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: queryKeys.channels });
@@ -527,7 +533,7 @@ export function ChannelsPage() {
 
       {/* ── Create / edit ─────────────────────────────────────── */}
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
-        <SheetContent side="right" className="overflow-y-auto">
+        <SheetContent side="right">
           <SheetHeader>
             <SheetTitle>{editing ? 'تعديل القناة' : 'إضافة نموذج'}</SheetTitle>
             <SheetDescription>
@@ -535,8 +541,14 @@ export function ChannelsPage() {
             </SheetDescription>
           </SheetHeader>
 
+          {/*
+            The sheet is a fixed-height column: the fields scroll in the middle
+            block and the footer stays pinned at the bottom. Without this split
+            the footer drifts up and leaves a dead black area under it — the
+            "scroll glitch".
+          */}
           <form
-            className="flex-1 space-y-5 overflow-y-auto px-6 py-5"
+            className="flex min-h-0 flex-1 flex-col"
             onSubmit={(event: FormEvent) => {
               event.preventDefault();
               // The models field has no visible input any more, so "pick at
@@ -560,6 +572,7 @@ export function ChannelsPage() {
               }
             }}
           >
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
             <div className="space-y-2">
               <Label htmlFor="channel-name">اسم القناة</Label>
               <Input
@@ -809,8 +822,9 @@ export function ChannelsPage() {
                 </div>
               ) : null}
             </div>
+            </div>
 
-            <SheetFooter className="px-0">
+            <SheetFooter>
               <Button type="submit" disabled={save.isPending}>
                 {save.isPending ? <Spinner label="جارٍ الحفظ" /> : editing ? 'حفظ التغييرات' : 'إضافة القناة'}
               </Button>

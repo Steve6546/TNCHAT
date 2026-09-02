@@ -133,6 +133,41 @@ function resolveCorsOrigin(isProduction: boolean): string[] | boolean {
     .filter((value) => value !== '');
 }
 
+/**
+ * Supabase is the only database backend.
+ *
+ * The project is online-only by decision: the gateway stores channels, keys,
+ * logs and settings in the Supabase Postgres instance, and dashboard accounts
+ * live in Supabase Auth. `DATABASE_URL` is therefore required — without it the
+ * server refuses to boot with a clear message rather than failing later with
+ * an obscure connection error.
+ */
+function resolveDatabaseUrl(): string {
+  const raw = (process.env.DATABASE_URL ?? '').trim();
+  if (raw !== '') return raw;
+
+  console.error(
+    '[config] DATABASE_URL is not set.\n' +
+      '[config] Create (or unpause) a Supabase project, then set in .env:\n' +
+      '[config]   DATABASE_URL=postgresql://<user>:<password>@<host>:5432/postgres\n' +
+      '[config]   SUPABASE_URL=https://<project-ref>.supabase.co\n' +
+      '[config]   SUPABASE_ANON_KEY=<anon key>',
+  );
+  process.exit(1);
+}
+
+const databaseUrl = resolveDatabaseUrl();
+const supabaseUrl = (process.env.SUPABASE_URL ?? '').trim().replace(/\/+$/, '');
+const supabaseAnonKey = (process.env.SUPABASE_ANON_KEY ?? '').trim();
+
+if (supabaseUrl === '' || supabaseAnonKey === '') {
+  console.error(
+    '[config] SUPABASE_URL and SUPABASE_ANON_KEY are required for dashboard authentication.\n' +
+      '[config] Set both in .env — they come from the same Supabase project as DATABASE_URL.',
+  );
+  process.exit(1);
+}
+
 ensureDir(DATA_DIR);
 
 const masterKey = resolveMasterKey();
@@ -143,15 +178,16 @@ export const config = {
 
   host: process.env.HOST ?? '127.0.0.1',
   port: int(process.env.PORT, 8787),
-  dbPath: process.env.DB_PATH ? path.resolve(process.env.DB_PATH) : path.join(DATA_DIR, 'app.db'),
   dataDir: DATA_DIR,
   webDistDir: WEB_DIST_DIR,
 
+  /** Supabase Postgres connection string. The only data store. */
+  databaseUrl,
+  supabaseUrl,
+  supabaseAnonKey,
+
   masterKey,
   sessionSecret: resolveSessionSecret(masterKey),
-
-  /** Dashboard password from the environment, used only until one is stored. */
-  adminPassword: process.env.ADMIN_PASSWORD ?? '',
 
   /** Relay behaviour. */
   retryTimes: int(process.env.RETRY_TIMES, 3),
@@ -184,6 +220,12 @@ if (isProduction) {
 
 /** Exposed by the health endpoint so a deployment can assert its own config. */
 export function configSummary(): Record<string, unknown> {
+  let supabaseHost = '';
+  try {
+    supabaseHost = new URL(supabaseUrl).host;
+  } catch {
+    supabaseHost = '';
+  }
   return {
     environment: isProduction ? 'production' : 'development',
     host: config.host,
@@ -191,6 +233,8 @@ export function configSummary(): Record<string, unknown> {
     retryTimes: config.retryTimes,
     requestTimeoutMs: config.requestTimeoutMs,
     streamingTimeoutMs: config.streamingTimeoutMs,
+    database: 'supabase-postgres',
+    supabaseHost,
     masterKeySource: process.env.MASTER_KEY ? 'environment' : 'generated-file',
     sessionSecretSource: process.env.SESSION_SECRET ? 'environment' : 'derived',
     cors:

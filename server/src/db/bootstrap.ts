@@ -1,47 +1,45 @@
 import { config } from '../config.js';
 import { rebuildRoutingIndex } from '../gateway/ability-index.js';
-import {
-  getStoredPasswordHash,
-  isPasswordConfigured,
-  setAdminPassword,
-} from '../gateway/dashboard-auth.js';
 import { migrate } from './migrate.js';
+import { pg } from './index.js';
 
 /**
  * First-run bootstrap.
  *
  *   tsx src/db/bootstrap.ts
  *
- * Does three things, in order:
- *   1. applies the schema;
- *   2. builds the routing index so the first request is already warm;
- *   3. promotes ADMIN_PASSWORD from the environment into the database, once.
+ * Does two things, in order:
+ *   1. applies the schema to the Supabase Postgres database;
+ *   2. builds the routing index so the first request is already warm.
  *
- * Step 3 is what lets you delete the plaintext password from `.env` afterwards:
- * `login()` prefers the stored hash and ignores the environment value as soon
- * as one exists. This is not a seed of demo data — if no password is configured
- * the dashboard simply asks you to choose one on first visit.
+ * Dashboard accounts live in Supabase Auth — there is no local admin password
+ * to promote, and no seed data of any kind.
  */
 
-function main(): void {
-  migrate();
-  console.log(`[bootstrap] schema up to date at ${config.dbPath}`);
+async function main(): Promise<void> {
+  await migrate();
+  console.log('[bootstrap] schema up to date on the Supabase database');
 
-  rebuildRoutingIndex();
+  await rebuildRoutingIndex();
 
-  if (getStoredPasswordHash() === null && config.adminPassword !== '') {
-    setAdminPassword(config.adminPassword);
-    console.log(
-      '[bootstrap] Stored a hash of ADMIN_PASSWORD in the database.\n' +
-        '[bootstrap] You can now remove ADMIN_PASSWORD from .env — it is ignored from here on.',
-    );
-  } else if (isPasswordConfigured()) {
-    console.log('[bootstrap] A dashboard password is already configured.');
-  } else {
-    console.log(
-      '[bootstrap] No dashboard password yet — the dashboard will ask you to create one.',
-    );
+  let latencyMs: number | null = null;
+  const startedAt = Date.now();
+  try {
+    await pg`SELECT 1`;
+    latencyMs = Date.now() - startedAt;
+  } catch {
+    latencyMs = null;
   }
+  console.log(
+    latencyMs === null
+      ? '[bootstrap] WARNING: database did not answer a probe query'
+      : `[bootstrap] database reachable (${latencyMs} ms)`,
+  );
+
+  await pg.end();
 }
 
-main();
+main().catch((error) => {
+  console.error('[bootstrap] failed:', error instanceof Error ? error.message : error);
+  process.exit(1);
+});

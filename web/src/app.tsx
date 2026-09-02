@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 
 import { AppShell } from './components/layout/app-shell';
+import { AuthCallbackPage } from './features/auth/auth-callback';
 import { LoginPage } from './features/auth/login-page';
 import { ChannelsPage } from './features/channels/channels-page';
 import { KeysPage } from './features/keys/keys-page';
@@ -13,10 +14,15 @@ function ProtectedShell() {
   return token ? <AppShell /> : <Navigate to="/login" replace />;
 }
 
+/**
+ * Email links are rewritten to /auth/callback in main.tsx, before the router
+ * mounts. The callback route itself lives in the map below.
+ */
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/callback" element={<AuthCallbackPage />} />
       <Route element={<ProtectedShell />}>
         <Route index element={<OverviewPage />} />
         <Route path="models" element={<ChannelsPage />} />

@@ -22,22 +22,19 @@ importers:
       '@fastify/static':
         specifier: ^8.0.4
         version: 8.3.0
-      better-sqlite3:
-        specifier: ^11.8.1
-        version: 11.10.0
       drizzle-orm:
         specifier: ^0.38.4
-        version: 0.38.4(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@11.10.0)(react@19.2.8)
+        version: 0.38.4(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@11.10.0)(postgres@3.4.9)(react@19.2.8)
       fastify:
         specifier: ^5.2.1
         version: 5.12.1
       pino-pretty:
         specifier: ^13.0.0
         version: 13.1.3
+      postgres:
+        specifier: ^3.4.5
+        version: 3.4.9
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.12
-        version: 7.6.13
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.1
@@ -1527,6 +1524,10 @@ packages:
     resolution: {integrity: sha512-u82N74LFzG8ca+dD8puPnplTXoGH4fTPpVGuIbt36G3qvNlkvfD0lEAZSxaly3KX8TS/L1A1gsCEmvKmBcVbkQ==}
     engines: {node: ^10 || ^12 || >=14}
 
+  postgres@3.4.9:
+    resolution: {integrity: sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw==}
+    engines: {node: '>=12'}
+
   prebuild-install@7.1.3:
     resolution: {integrity: sha512-8Mf2cbV7x1cXPUILADGI3wuhfqWvtiLA1iclTDbFRZkgRQS0NqsPZphna9V+HyTEadheuPmjaJMsbzKQFOzLug==}
     engines: {node: '>=10'}
@@ -2528,6 +2529,7 @@ snapshots:
   '@types/better-sqlite3@7.6.13':
     dependencies:
       '@types/node': 22.20.1
+    optional: true
 
   '@types/d3-array@3.2.2': {}
 
@@ -2607,7 +2609,8 @@ snapshots:
 
   balanced-match@4.0.4: {}
 
-  base64-js@1.5.1: {}
+  base64-js@1.5.1:
+    optional: true
 
   baseline-browser-mapping@2.11.20: {}
 
@@ -2615,16 +2618,19 @@ snapshots:
     dependencies:
       bindings: 1.5.0
       prebuild-install: 7.1.3
+    optional: true
 
   bindings@1.5.0:
     dependencies:
       file-uri-to-path: 1.0.0
+    optional: true
 
   bl@4.1.0:
     dependencies:
       buffer: 5.7.1
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   brace-expansion@5.0.9:
     dependencies:
@@ -2642,10 +2648,12 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+    optional: true
 
   caniuse-lite@1.0.30001810: {}
 
-  chownr@1.1.4: {}
+  chownr@1.1.4:
+    optional: true
 
   class-variance-authority@0.7.1:
     dependencies:
@@ -2720,8 +2728,10 @@ snapshots:
   decompress-response@6.0.0:
     dependencies:
       mimic-response: 3.1.0
+    optional: true
 
-  deep-extend@0.6.0: {}
+  deep-extend@0.6.0:
+    optional: true
 
   depd@2.0.0: {}
 
@@ -2731,11 +2741,12 @@ snapshots:
 
   detect-node-es@1.1.0: {}
 
-  drizzle-orm@0.38.4(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@11.10.0)(react@19.2.8):
+  drizzle-orm@0.38.4(@types/better-sqlite3@7.6.13)(@types/react@19.2.18)(better-sqlite3@11.10.0)(postgres@3.4.9)(react@19.2.8):
     optionalDependencies:
       '@types/better-sqlite3': 7.6.13
       '@types/react': 19.2.18
       better-sqlite3: 11.10.0
+      postgres: 3.4.9
       react: 19.2.8
 
   electron-to-chromium@1.5.416: {}
@@ -2786,7 +2797,8 @@ snapshots:
 
   eventemitter3@5.0.4: {}
 
-  expand-template@2.0.3: {}
+  expand-template@2.0.3:
+    optional: true
 
   fast-copy@4.0.4: {}
 
@@ -2841,7 +2853,8 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.7
 
-  file-uri-to-path@1.0.0: {}
+  file-uri-to-path@1.0.0:
+    optional: true
 
   find-my-way@9.9.0:
     dependencies:
@@ -2854,7 +2867,8 @@ snapshots:
       cross-spawn: 7.0.6
       signal-exit: 4.1.0
 
-  fs-constants@1.0.0: {}
+  fs-constants@1.0.0:
+    optional: true
 
   fsevents@2.3.3:
     optional: true
@@ -2863,7 +2877,8 @@ snapshots:
 
   get-nonce@1.0.1: {}
 
-  github-from-package@0.0.0: {}
+  github-from-package@0.0.0:
+    optional: true
 
   glob@11.1.0:
     dependencies:
@@ -2886,13 +2901,15 @@ snapshots:
       statuses: 2.0.2
       toidentifier: 1.0.1
 
-  ieee754@1.2.1: {}
+  ieee754@1.2.1:
+    optional: true
 
   immer@11.1.18: {}
 
   inherits@2.0.4: {}
 
-  ini@1.3.8: {}
+  ini@1.3.8:
+    optional: true
 
   internmap@2.0.3: {}
 
@@ -2991,7 +3008,8 @@ snapshots:
 
   mime@3.0.0: {}
 
-  mimic-response@3.1.0: {}
+  mimic-response@3.1.0:
+    optional: true
 
   minimatch@10.2.6:
     dependencies:
@@ -3001,7 +3019,8 @@ snapshots:
 
   minipass@7.1.3: {}
 
-  mkdirp-classic@0.5.3: {}
+  mkdirp-classic@0.5.3:
+    optional: true
 
   mnemonist@0.40.0:
     dependencies:
@@ -3011,11 +3030,13 @@ snapshots:
 
   nanoid@3.3.18: {}
 
-  napi-build-utils@2.0.0: {}
+  napi-build-utils@2.0.0:
+    optional: true
 
   node-abi@3.96.0:
     dependencies:
       semver: 7.8.5
+    optional: true
 
   node-releases@2.0.54: {}
 
@@ -3082,6 +3103,8 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
+  postgres@3.4.9: {}
+
   prebuild-install@7.1.3:
     dependencies:
       detect-libc: 2.1.2
@@ -3096,6 +3119,7 @@ snapshots:
       simple-get: 4.0.1
       tar-fs: 2.1.5
       tunnel-agent: 0.6.0
+    optional: true
 
   process-warning@4.0.1: {}
 
@@ -3114,6 +3138,7 @@ snapshots:
       ini: 1.3.8
       minimist: 1.2.8
       strip-json-comments: 2.0.1
+    optional: true
 
   react-dom@19.2.8(react@19.2.8):
     dependencies:
@@ -3181,6 +3206,7 @@ snapshots:
       inherits: 2.0.4
       string_decoder: 1.3.0
       util-deprecate: 1.0.2
+    optional: true
 
   real-require@0.2.0: {}
 
@@ -3282,13 +3308,15 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  simple-concat@1.0.1: {}
+  simple-concat@1.0.1:
+    optional: true
 
   simple-get@4.0.1:
     dependencies:
       decompress-response: 6.0.0
       once: 1.4.0
       simple-concat: 1.0.1
+    optional: true
 
   sonic-boom@4.2.1:
     dependencies:
@@ -3303,8 +3331,10 @@ snapshots:
   string_decoder@1.3.0:
     dependencies:
       safe-buffer: 5.2.1
+    optional: true
 
-  strip-json-comments@2.0.1: {}
+  strip-json-comments@2.0.1:
+    optional: true
 
   strip-json-comments@5.0.3: {}
 
@@ -3320,6 +3350,7 @@ snapshots:
       mkdirp-classic: 0.5.3
       pump: 3.0.4
       tar-stream: 2.2.0
+    optional: true
 
   tar-stream@2.2.0:
     dependencies:
@@ -3328,6 +3359,7 @@ snapshots:
       fs-constants: 1.0.0
       inherits: 2.0.4
       readable-stream: 3.6.2
+    optional: true
 
   thread-stream@4.2.0:
     dependencies:
@@ -3355,6 +3387,7 @@ snapshots:
   tunnel-agent@0.6.0:
     dependencies:
       safe-buffer: 5.2.1
+    optional: true
 
   typescript@5.9.3: {}
 
@@ -3385,7 +3418,8 @@ snapshots:
     dependencies:
       react: 19.2.8
 
-  util-deprecate@1.0.2: {}
+  util-deprecate@1.0.2:
+    optional: true
 
   victory-vendor@37.3.6:
     dependencies:
